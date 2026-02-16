@@ -8,6 +8,12 @@ import type * as vscode from 'vscode';
  * (Requirements 15.2, 15.3, 15.4)
  */
 export class PhpAgentConfigProvider implements vscode.DebugConfigurationProvider {
+  private outputChannel: vscode.OutputChannel | undefined;
+
+  setOutputChannel(channel: vscode.OutputChannel): void {
+    this.outputChannel = channel;
+  }
+
   resolveDebugConfiguration(
     _folder: vscode.WorkspaceFolder | undefined,
     config: vscode.DebugConfiguration,
@@ -18,10 +24,30 @@ export class PhpAgentConfigProvider implements vscode.DebugConfigurationProvider
       agentSessionId?: string;
     };
 
-    return {
+    const resolved: vscode.DebugConfiguration = {
       ...rest,
       type: 'php',
       __agentInitiated: true,
     };
+
+    this.outputChannel?.appendLine(
+      `[PhpAgentConfigProvider] resolveDebugConfiguration input: ${JSON.stringify(config)}`,
+    );
+    this.outputChannel?.appendLine(
+      `[PhpAgentConfigProvider] resolveDebugConfiguration output: ${JSON.stringify(resolved)}`,
+    );
+
+    return resolved;
+  }
+
+  resolveDebugConfigurationWithSubstitutedVariables(
+    _folder: vscode.WorkspaceFolder | undefined,
+    config: vscode.DebugConfiguration,
+    _token?: vscode.CancellationToken,
+  ): vscode.ProviderResult<vscode.DebugConfiguration> {
+    this.outputChannel?.appendLine(
+      `[PhpAgentConfigProvider] afterSubstitution: ${JSON.stringify(config)}`,
+    );
+    return config;
   }
 }

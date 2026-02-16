@@ -14884,13 +14884,30 @@ var VsCodeNotificationSender = class {
 
 // src/config-provider.ts
 var PhpAgentConfigProvider = class {
+  outputChannel;
+  setOutputChannel(channel) {
+    this.outputChannel = channel;
+  }
   resolveDebugConfiguration(_folder, config2, _token) {
     const { backendMode, agentSessionId, ...rest } = config2;
-    return {
+    const resolved = {
       ...rest,
       type: "php",
       __agentInitiated: true
     };
+    this.outputChannel?.appendLine(
+      `[PhpAgentConfigProvider] resolveDebugConfiguration input: ${JSON.stringify(config2)}`
+    );
+    this.outputChannel?.appendLine(
+      `[PhpAgentConfigProvider] resolveDebugConfiguration output: ${JSON.stringify(resolved)}`
+    );
+    return resolved;
+  }
+  resolveDebugConfigurationWithSubstitutedVariables(_folder, config2, _token) {
+    this.outputChannel?.appendLine(
+      `[PhpAgentConfigProvider] afterSubstitution: ${JSON.stringify(config2)}`
+    );
+    return config2;
   }
 };
 
@@ -15502,8 +15519,26 @@ function activate(context) {
   const statusBarItem = vscode5.window.createStatusBarItem(vscode5.StatusBarAlignment.Left);
   const notifier = new VsCodeNotificationSender(outputChannel, statusBarItem);
   sessionFactory = new SessionFactory(notifier, outputChannel);
+  const configProvider = new PhpAgentConfigProvider();
+  configProvider.setOutputChannel(outputChannel);
   context.subscriptions.push(
-    vscode5.debug.registerDebugConfigurationProvider("php-agent", new PhpAgentConfigProvider())
+    vscode5.debug.registerDebugConfigurationProvider("php-agent", configProvider)
+  );
+  context.subscriptions.push(
+    vscode5.debug.onDidStartDebugSession((session) => {
+      if (session.type === "php" || session.configuration?.type === "php") {
+        outputChannel.appendLine(
+          `[DebugSession] Started: ${session.name} (type=${session.type})`
+        );
+        outputChannel.appendLine(
+          `[DebugSession] Configuration: ${JSON.stringify(session.configuration)}`
+        );
+        const pm = session.configuration?.pathMappings;
+        outputChannel.appendLine(
+          `[DebugSession] pathMappings present: ${pm !== void 0}, value: ${JSON.stringify(pm)}`
+        );
+      }
+    })
   );
   if (typeof vscode5.lm?.registerTool === "function") {
     registerAllLmTools(context, sessionFactory);

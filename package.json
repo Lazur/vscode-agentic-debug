@@ -1,9 +1,9 @@
 {
   "name": "vscode-agentic-debug",
   "displayName": "Agentic Debug",
-  "description": "Exposes PHP/Xdebug debugging as VS Code Language Model Tools for Copilot agent mode",
+  "description": "Exposes PHP/Xdebug debugging methods as VS Code Language Model Tools for Copilot agent mode",
   "version": "0.1.0",
-  "publisher": "php-debug-mcp",
+  "publisher": "php-agentic-debug",
   "license": "MIT",
   "engines": {
     "vscode": "^1.95.0"
@@ -36,7 +36,27 @@
               }
             }
           }
-        }
+        },
+        "initialConfigurations": [
+          {
+            "type": "php-agent",
+            "request": "launch",
+            "name": "PHP (Agent-Controlled)",
+            "backendMode": "ui"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "PHP (Agent-Controlled): Launch",
+            "description": "Launch a PHP debug session controlled by the AI agent",
+            "body": {
+              "type": "php-agent",
+              "request": "launch",
+              "name": "PHP (Agent-Controlled)",
+              "backendMode": "ui"
+            }
+          }
+        ]
       }
     ],
     "configuration": {
@@ -386,12 +406,11 @@
   "scripts": {
     "build": "tsc",
     "bundle": "esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --sourcemap",
+    "package": "npm run bundle && vsce package --allow-missing-repository",
     "test": "vitest --run"
   },
-  "dependencies": {
-    "ts-php-debug-mcp": "file:../ts-php-debug-mcp"
-  },
   "devDependencies": {
+    "ts-php-debug-mcp": "file:../ts-php-debug-mcp",
     "@types/vscode": "^1.95.0",
     "@types/node": "^25.2.3",
     "@vscode/debugprotocol": "^1.68.0",

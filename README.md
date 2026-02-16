@@ -2,7 +2,7 @@
 
 VS Code extension that exposes PHP/Xdebug debugging as native [Language Model Tools](https://code.visualstudio.com/api/extension-guides/language-model-tool), enabling Copilot agent mode to programmatically launch, control, and inspect debug sessions.
 
-The extension is a thin adapter layer over the backend-agnostic tool handlers from [`ts-php-debug-mcp`](../ts-php-debug-mcp/). The existing MCP server remains fully operational for CLI and non-VS Code clients.
+The extension is a thin adapter layer over the backend-agnostic tool handlers from `ts-php-debug-mcp`. The existing MCP server remains fully operational for CLI and non-VS Code clients.
 
 ## Features
 
@@ -32,6 +32,53 @@ To bundle for distribution:
 ```bash
 npm run bundle
 ```
+
+## Installing in VS Code
+
+Since this extension isn't published to the marketplace yet, install it locally:
+
+### Option A: Symlink into extensions folder
+
+```bash
+# Build the extension
+cd vscode-agentic-debug
+npm install
+npm run bundle
+
+# Symlink into VS Code extensions directory
+ln -s "$(pwd)" ~/.vscode/extensions/vscode-agentic-debug
+```
+
+Restart VS Code. The extension activates when Copilot invokes `debug_launch` or when a `php-agent` debug config is resolved.
+
+### Option B: Package as VSIX
+
+Requires [`@vscode/vsce`](https://github.com/microsoft/vscode-vsce):
+
+```bash
+npm install -g @vscode/vsce
+cd vscode-agentic-debug
+npm run bundle
+vsce package
+```
+
+Then install the `.vsix` file:
+
+```bash
+code --install-extension vscode-agentic-debug-0.1.0.vsix
+```
+
+Or in VS Code: Extensions panel → `...` menu → "Install from VSIX..."
+
+### Option C: Development host (for debugging the extension itself)
+
+1. Open the `vscode-agentic-debug` folder in VS Code
+2. Press `F5` to launch an Extension Development Host
+3. The extension loads in the new window with full debugging support
+
+### Verify installation
+
+After installing, open the Output panel (`View → Output`) and select "Agentic Debug" from the dropdown. You should see tool registration logs when the extension activates. If `vscode.lm.registerTool` isn't available in your VS Code version, you'll see a warning — the extension still activates but without LM tools.
 
 ## Backend Modes
 
@@ -76,6 +123,51 @@ Settings are contributed under `agenticDebug.*` in VS Code:
 | `agenticDebug.maxConnections` | number | `0` | Max Xdebug connections (0 = unlimited) |
 
 Tool parameters passed to `debug_launch` override VS Code settings, which override hardcoded defaults.
+
+## Example: Prompting the Agent to Debug
+
+Here's a prompt you can paste into Copilot agent chat to have it plan and execute a debug session using the tools:
+
+```
+I have a bug in my PHP application — the `calculateDiscount()` function in
+`src/Pricing/DiscountService.php` returns 0 instead of the expected percentage
+when the customer has a loyalty tier of "gold".
+
+Debug this for me:
+
+1. Read the source of `src/Pricing/DiscountService.php` to understand the logic.
+2. Use #debugLaunch to start a UI debug session on port 9003.
+3. Use #debugBreakpoints to set a breakpoint at the entry of `calculateDiscount()`.
+4. I'll trigger the request from my browser. After that, use #debugStatus to
+   detect when execution hits the breakpoint.
+5. Once paused, use #debugStackTrace to see the call chain, then #debugScopes
+   and #debugVariables to inspect the `$customer` and `$tier` variables.
+6. Use #debugEvaluate to test `$customer->getLoyaltyTier()` and
+   `$this->tierMultipliers['gold']`.
+7. Use #debugNext to step through the discount calculation line by line,
+   inspecting variables after each step.
+8. Summarize what you found — which line produces the wrong value and why.
+9. Use #debugTerminate to end the session.
+```
+
+The `#toolReferenceName` syntax (e.g. `#debugLaunch`) references the tools directly in Copilot chat. The agent will call each tool in sequence, inspect the results, and report back.
+
+### Typical tool call flow
+
+```
+debug_launch  →  debug_breakpoints  →  (wait for hit)  →  debug_status
+     →  debug_stack_trace  →  debug_scopes  →  debug_variables
+     →  debug_evaluate  →  debug_next  →  debug_variables  →  ...
+     →  debug_terminate
+```
+
+### Shorter prompt for quick inspection
+
+```
+Debug my PHP app in UI mode. Set a breakpoint at line 42 of
+src/Controllers/OrderController.php, wait for a hit, then show me
+the full variable state and call stack. I'll trigger the request.
+```
 
 ## Architecture
 
