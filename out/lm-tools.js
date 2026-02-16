@@ -33,59 +33,66 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.DebugBreakpointsGetTool = exports.DebugBreakpointsTool = exports.DebugThreadsTool = exports.DebugStatusTool = exports.DebugEvaluateTool = exports.DebugVariablesTool = exports.DebugScopesTool = exports.DebugStackTraceTool = exports.DebugPauseTool = exports.DebugStepOutTool = exports.DebugStepInTool = exports.DebugNextTool = exports.DebugContinueTool = exports.DebugTerminateTool = exports.DebugLaunchTool = void 0;
 exports.registerAllLmTools = registerAllLmTools;
 const vscode = __importStar(require("vscode"));
-const debug_continue_js_1 = require("ts-php-debug-mcp/tools/debug-continue.js");
-const debug_next_js_1 = require("ts-php-debug-mcp/tools/debug-next.js");
-const debug_step_in_js_1 = require("ts-php-debug-mcp/tools/debug-step-in.js");
-const debug_step_out_js_1 = require("ts-php-debug-mcp/tools/debug-step-out.js");
-const debug_pause_js_1 = require("ts-php-debug-mcp/tools/debug-pause.js");
-const debug_stack_trace_js_1 = require("ts-php-debug-mcp/tools/debug-stack-trace.js");
-const debug_scopes_js_1 = require("ts-php-debug-mcp/tools/debug-scopes.js");
-const debug_variables_js_1 = require("ts-php-debug-mcp/tools/debug-variables.js");
-const debug_evaluate_js_1 = require("ts-php-debug-mcp/tools/debug-evaluate.js");
-const debug_status_js_1 = require("ts-php-debug-mcp/tools/debug-status.js");
-const debug_threads_js_1 = require("ts-php-debug-mcp/tools/debug-threads.js");
-const debug_set_breakpoints_js_1 = require("ts-php-debug-mcp/tools/debug-set-breakpoints.js");
-const types_js_1 = require("ts-php-debug-mcp/tools/types.js");
-const result_wrapper_js_1 = require("./result-wrapper.js");
-// --- Helper ---
-function noSessionError() {
-    return (0, types_js_1.errorResult)('No active debug session. Call debug_launch first.', 'SESSION_NOT_STARTED');
+function ok(data) {
+    return { success: true, data };
 }
-function noThreadIdError() {
-    return (0, types_js_1.errorResult)('threadId is required — no stopped thread available', 'INVALID_PARAMS');
+function err(message, code = 'DAP_ERROR') {
+    return { success: false, error: { message, code } };
 }
-// --- 5.1: DebugLaunchTool (Requirements 3.1, 3.4, 3.5, 4.1, 5.1-5.5) ---
+function wrap(result) {
+    const payload = result.success ? result.data : result.error;
+    return new vscode.LanguageModelToolResult([
+        new vscode.LanguageModelTextPart(JSON.stringify(payload, null, 2)),
+    ]);
+}
+function noSession() {
+    return err('No active debug session. Call debug_launch first.', 'SESSION_NOT_STARTED');
+}
+// --- Helper: resolve threadId from input or last stopped thread ---
+function resolveThreadId(mgr, input) {
+    if (input.threadId !== undefined)
+        return input.threadId;
+    if (mgr.stopInfo)
+        return mgr.stopInfo.threadId;
+    return err('threadId is required — no stopped thread available', 'INVALID_PARAMS');
+}
+// --- Launch ---
 class DebugLaunchTool {
-    sessionFactory;
-    constructor(sessionFactory) {
-        this.sessionFactory = sessionFactory;
+    mgr;
+    constructor(mgr) {
+        this.mgr = mgr;
     }
     prepareInvocation(options, _token) {
-        const mode = options.input.backendMode ?? 'ui';
         const port = options.input.port ?? 'default';
         return {
             confirmationMessages: {
                 title: 'Launch Debug Session',
-                message: new vscode.MarkdownString(`Start **${mode}** debug session on port **${port}**?`),
+                message: new vscode.MarkdownString(`Start PHP debug session on port **${port}**?`),
             },
         };
     }
     async invoke(options, _token) {
-        const result = await this.sessionFactory.launch(options.input);
-        return (0, result_wrapper_js_1.wrapToolResult)(result);
+        try {
+            await this.mgr.launch(options.input);
+            return wrap(ok({
+                status: this.mgr.state,
+                message: `Debug session launched, listening on port ${options.input.port ?? 9003}`,
+            }));
+        }
+        catch (e) {
+            return wrap(err(e instanceof Error ? e.message : String(e)));
+        }
     }
 }
-exports.DebugLaunchTool = DebugLaunchTool;
-// --- 5.2: DebugTerminateTool (Requirements 3.1, 3.4, 3.5, 4.2) ---
+// --- Terminate ---
 class DebugTerminateTool {
-    sessionFactory;
-    constructor(sessionFactory) {
-        this.sessionFactory = sessionFactory;
+    mgr;
+    constructor(mgr) {
+        this.mgr = mgr;
     }
-    prepareInvocation(_options, _token) {
+    prepareInvocation() {
         return {
             confirmationMessages: {
                 title: 'Terminate Debug Session',
@@ -93,283 +100,278 @@ class DebugTerminateTool {
             },
         };
     }
-    async invoke(_options, _token) {
-        const result = await this.sessionFactory.terminate();
-        return (0, result_wrapper_js_1.wrapToolResult)(result);
+    async invoke() {
+        try {
+            await this.mgr.terminate();
+            return wrap(ok({ status: 'terminated', message: 'Debug session terminated' }));
+        }
+        catch (e) {
+            return wrap(err(e instanceof Error ? e.message : String(e)));
+        }
     }
 }
-exports.DebugTerminateTool = DebugTerminateTool;
-// --- 5.3: Stepping tools (Requirements 3.1, 3.4, 4.3, 10.1-10.6) ---
-/** Resolve threadId from input or session.stopInfo, returning an error ToolResult if neither available. */
-function resolveThreadId(sessionFactory, input) {
-    if (input.threadId !== undefined)
-        return { threadId: input.threadId };
-    const stopInfo = sessionFactory.session?.stopInfo;
-    if (stopInfo)
-        return { threadId: stopInfo.threadId };
-    return { error: noThreadIdError() };
+// --- Simple DAP command tool (continue, next, stepIn, stepOut, pause) ---
+function makeStepTool(command, label) {
+    return class {
+        mgr;
+        constructor(mgr) {
+            this.mgr = mgr;
+        }
+        prepareInvocation(options) {
+            return { invocationMessage: `${label} on thread ${options.input.threadId ?? 'default'}` };
+        }
+        async invoke(options) {
+            if (!this.mgr.activeSession)
+                return wrap(noSession());
+            const tid = resolveThreadId(this.mgr, options.input);
+            if (typeof tid !== 'number')
+                return wrap(tid);
+            try {
+                await this.mgr.customRequest(command, { threadId: tid });
+                return wrap(ok({ threadId: tid, message: `${label} on thread ${tid}` }));
+            }
+            catch (e) {
+                return wrap(err(e instanceof Error ? e.message : String(e)));
+            }
+        }
+    };
 }
-class DebugContinueTool {
-    sessionFactory;
-    constructor(sessionFactory) {
-        this.sessionFactory = sessionFactory;
-    }
-    prepareInvocation(options, _token) {
-        return { invocationMessage: `Continuing execution on thread ${options.input.threadId ?? 'default'}` };
-    }
-    async invoke(options, _token) {
-        if (!this.sessionFactory.session)
-            return (0, result_wrapper_js_1.wrapToolResult)(noSessionError());
-        const resolved = resolveThreadId(this.sessionFactory, options.input);
-        if ('error' in resolved)
-            return (0, result_wrapper_js_1.wrapToolResult)(resolved.error);
-        const result = await (0, debug_continue_js_1.handleDebugContinue)(this.sessionFactory.session, { threadId: resolved.threadId });
-        return (0, result_wrapper_js_1.wrapToolResult)(result);
-    }
-}
-exports.DebugContinueTool = DebugContinueTool;
-class DebugNextTool {
-    sessionFactory;
-    constructor(sessionFactory) {
-        this.sessionFactory = sessionFactory;
-    }
-    prepareInvocation(options, _token) {
-        return { invocationMessage: `Stepping over on thread ${options.input.threadId ?? 'default'}` };
-    }
-    async invoke(options, _token) {
-        if (!this.sessionFactory.session)
-            return (0, result_wrapper_js_1.wrapToolResult)(noSessionError());
-        const resolved = resolveThreadId(this.sessionFactory, options.input);
-        if ('error' in resolved)
-            return (0, result_wrapper_js_1.wrapToolResult)(resolved.error);
-        const result = await (0, debug_next_js_1.handleDebugNext)(this.sessionFactory.session, { threadId: resolved.threadId });
-        return (0, result_wrapper_js_1.wrapToolResult)(result);
-    }
-}
-exports.DebugNextTool = DebugNextTool;
-class DebugStepInTool {
-    sessionFactory;
-    constructor(sessionFactory) {
-        this.sessionFactory = sessionFactory;
-    }
-    prepareInvocation(options, _token) {
-        return { invocationMessage: `Stepping into on thread ${options.input.threadId ?? 'default'}` };
-    }
-    async invoke(options, _token) {
-        if (!this.sessionFactory.session)
-            return (0, result_wrapper_js_1.wrapToolResult)(noSessionError());
-        const resolved = resolveThreadId(this.sessionFactory, options.input);
-        if ('error' in resolved)
-            return (0, result_wrapper_js_1.wrapToolResult)(resolved.error);
-        const result = await (0, debug_step_in_js_1.handleDebugStepIn)(this.sessionFactory.session, { threadId: resolved.threadId });
-        return (0, result_wrapper_js_1.wrapToolResult)(result);
-    }
-}
-exports.DebugStepInTool = DebugStepInTool;
-class DebugStepOutTool {
-    sessionFactory;
-    constructor(sessionFactory) {
-        this.sessionFactory = sessionFactory;
-    }
-    prepareInvocation(options, _token) {
-        return { invocationMessage: `Stepping out on thread ${options.input.threadId ?? 'default'}` };
-    }
-    async invoke(options, _token) {
-        if (!this.sessionFactory.session)
-            return (0, result_wrapper_js_1.wrapToolResult)(noSessionError());
-        const resolved = resolveThreadId(this.sessionFactory, options.input);
-        if ('error' in resolved)
-            return (0, result_wrapper_js_1.wrapToolResult)(resolved.error);
-        const result = await (0, debug_step_out_js_1.handleDebugStepOut)(this.sessionFactory.session, { threadId: resolved.threadId });
-        return (0, result_wrapper_js_1.wrapToolResult)(result);
-    }
-}
-exports.DebugStepOutTool = DebugStepOutTool;
-class DebugPauseTool {
-    sessionFactory;
-    constructor(sessionFactory) {
-        this.sessionFactory = sessionFactory;
-    }
-    prepareInvocation(options, _token) {
-        return { invocationMessage: `Pausing execution on thread ${options.input.threadId ?? 'default'}` };
-    }
-    async invoke(options, _token) {
-        if (!this.sessionFactory.session)
-            return (0, result_wrapper_js_1.wrapToolResult)(noSessionError());
-        const resolved = resolveThreadId(this.sessionFactory, options.input);
-        if ('error' in resolved)
-            return (0, result_wrapper_js_1.wrapToolResult)(resolved.error);
-        const result = await (0, debug_pause_js_1.handleDebugPause)(this.sessionFactory.session, { threadId: resolved.threadId });
-        return (0, result_wrapper_js_1.wrapToolResult)(result);
-    }
-}
-exports.DebugPauseTool = DebugPauseTool;
-// --- 5.4: Inspection tools (Requirements 3.1, 3.4, 4.4, 11.1-11.5) ---
+const DebugContinueTool = makeStepTool('continue', 'Continued execution');
+const DebugNextTool = makeStepTool('next', 'Stepped over');
+const DebugStepInTool = makeStepTool('stepIn', 'Stepped into');
+const DebugStepOutTool = makeStepTool('stepOut', 'Stepped out');
+const DebugPauseTool = makeStepTool('pause', 'Paused execution');
+// --- Stack Trace ---
 class DebugStackTraceTool {
-    sessionFactory;
-    constructor(sessionFactory) {
-        this.sessionFactory = sessionFactory;
+    mgr;
+    constructor(mgr) {
+        this.mgr = mgr;
     }
-    prepareInvocation(_options, _token) {
+    prepareInvocation() {
         return { invocationMessage: 'Retrieving stack trace' };
     }
-    async invoke(options, _token) {
-        if (!this.sessionFactory.session)
-            return (0, result_wrapper_js_1.wrapToolResult)(noSessionError());
-        const resolved = resolveThreadId(this.sessionFactory, options.input);
-        if ('error' in resolved)
-            return (0, result_wrapper_js_1.wrapToolResult)(resolved.error);
-        const result = await (0, debug_stack_trace_js_1.handleDebugStackTrace)(this.sessionFactory.session, { threadId: resolved.threadId });
-        return (0, result_wrapper_js_1.wrapToolResult)(result);
+    async invoke(options) {
+        if (!this.mgr.activeSession)
+            return wrap(noSession());
+        const tid = resolveThreadId(this.mgr, options.input);
+        if (typeof tid !== 'number')
+            return wrap(tid);
+        try {
+            const body = await this.mgr.customRequest('stackTrace', { threadId: tid });
+            const frames = (body?.stackFrames ?? []).map((f) => ({
+                id: f.id,
+                name: f.name,
+                source: f.source ? { name: f.source.name, path: f.source.path, sourceReference: f.source.sourceReference } : undefined,
+                line: f.line,
+                column: f.column,
+            }));
+            return wrap(ok({ stackFrames: frames, totalFrames: body?.totalFrames }));
+        }
+        catch (e) {
+            return wrap(err(e instanceof Error ? e.message : String(e)));
+        }
     }
 }
-exports.DebugStackTraceTool = DebugStackTraceTool;
+// --- Scopes ---
 class DebugScopesTool {
-    sessionFactory;
-    constructor(sessionFactory) {
-        this.sessionFactory = sessionFactory;
+    mgr;
+    constructor(mgr) {
+        this.mgr = mgr;
     }
-    prepareInvocation(options, _token) {
+    prepareInvocation(options) {
         return { invocationMessage: `Retrieving scopes for frame ${options.input.frameId}` };
     }
-    async invoke(options, _token) {
-        if (!this.sessionFactory.session)
-            return (0, result_wrapper_js_1.wrapToolResult)(noSessionError());
-        const result = await (0, debug_scopes_js_1.handleDebugScopes)(this.sessionFactory.session, options.input);
-        return (0, result_wrapper_js_1.wrapToolResult)(result);
+    async invoke(options) {
+        if (!this.mgr.activeSession)
+            return wrap(noSession());
+        try {
+            const body = await this.mgr.customRequest('scopes', { frameId: options.input.frameId });
+            const scopes = (body?.scopes ?? []).map((s) => ({
+                name: s.name,
+                variablesReference: s.variablesReference,
+                namedVariables: s.namedVariables,
+                indexedVariables: s.indexedVariables,
+                expensive: s.expensive,
+            }));
+            return wrap(ok({ scopes }));
+        }
+        catch (e) {
+            return wrap(err(e instanceof Error ? e.message : String(e)));
+        }
     }
 }
-exports.DebugScopesTool = DebugScopesTool;
+// --- Variables ---
 class DebugVariablesTool {
-    sessionFactory;
-    constructor(sessionFactory) {
-        this.sessionFactory = sessionFactory;
+    mgr;
+    constructor(mgr) {
+        this.mgr = mgr;
     }
-    prepareInvocation(options, _token) {
-        return { invocationMessage: `Retrieving variables for reference ${options.input.variablesReference}` };
+    prepareInvocation(options) {
+        return { invocationMessage: `Retrieving variables for ref ${options.input.variablesReference}` };
     }
-    async invoke(options, _token) {
-        if (!this.sessionFactory.session)
-            return (0, result_wrapper_js_1.wrapToolResult)(noSessionError());
-        const result = await (0, debug_variables_js_1.handleDebugVariables)(this.sessionFactory.session, options.input);
-        return (0, result_wrapper_js_1.wrapToolResult)(result);
+    async invoke(options) {
+        if (!this.mgr.activeSession)
+            return wrap(noSession());
+        try {
+            const args = { variablesReference: options.input.variablesReference };
+            if (options.input.start !== undefined)
+                args.start = options.input.start;
+            if (options.input.count !== undefined)
+                args.count = options.input.count;
+            const body = await this.mgr.customRequest('variables', args);
+            const variables = (body?.variables ?? []).map((v) => ({
+                name: v.name,
+                value: v.value,
+                type: v.type,
+                variablesReference: v.variablesReference ?? 0,
+                indexedVariables: v.indexedVariables,
+                namedVariables: v.namedVariables,
+            }));
+            return wrap(ok({ variables }));
+        }
+        catch (e) {
+            return wrap(err(e instanceof Error ? e.message : String(e)));
+        }
     }
 }
-exports.DebugVariablesTool = DebugVariablesTool;
+// --- Evaluate ---
 class DebugEvaluateTool {
-    sessionFactory;
-    constructor(sessionFactory) {
-        this.sessionFactory = sessionFactory;
+    mgr;
+    constructor(mgr) {
+        this.mgr = mgr;
     }
-    prepareInvocation(options, _token) {
+    prepareInvocation(options) {
         return { invocationMessage: `Evaluating: ${options.input.expression}` };
     }
-    async invoke(options, _token) {
-        if (!this.sessionFactory.session)
-            return (0, result_wrapper_js_1.wrapToolResult)(noSessionError());
-        const result = await (0, debug_evaluate_js_1.handleDebugEvaluate)(this.sessionFactory.session, options.input);
-        return (0, result_wrapper_js_1.wrapToolResult)(result);
+    async invoke(options) {
+        if (!this.mgr.activeSession)
+            return wrap(noSession());
+        try {
+            const args = {
+                expression: options.input.expression,
+                context: options.input.context ?? 'repl',
+            };
+            if (options.input.frameId !== undefined)
+                args.frameId = options.input.frameId;
+            const body = await this.mgr.customRequest('evaluate', args);
+            return wrap(ok({
+                result: body?.result,
+                type: body?.type,
+                variablesReference: body?.variablesReference ?? 0,
+                indexedVariables: body?.indexedVariables,
+                namedVariables: body?.namedVariables,
+            }));
+        }
+        catch (e) {
+            return wrap(err(e instanceof Error ? e.message : String(e)));
+        }
     }
 }
-exports.DebugEvaluateTool = DebugEvaluateTool;
-// --- 5.5: Status/utility tools (Requirements 3.1, 4.5, 12.1-12.6, 13.1-13.3) ---
+// --- Status ---
 class DebugStatusTool {
-    sessionFactory;
-    constructor(sessionFactory) {
-        this.sessionFactory = sessionFactory;
+    mgr;
+    constructor(mgr) {
+        this.mgr = mgr;
     }
-    prepareInvocation(_options, _token) {
+    prepareInvocation() {
         return { invocationMessage: 'Checking debug session status' };
     }
-    async invoke(_options, _token) {
-        if (!this.sessionFactory.session) {
-            // Callable in any state — return guidance when no session exists
-            const result = {
-                success: true,
-                data: {
-                    state: 'not_started',
-                    guidance: 'No active session. Call debug_launch to start debugging.',
-                },
-            };
-            return (0, result_wrapper_js_1.wrapToolResult)(result);
-        }
-        const result = (0, debug_status_js_1.handleDebugStatus)(this.sessionFactory.session);
-        return (0, result_wrapper_js_1.wrapToolResult)(result);
+    async invoke() {
+        const guidance = {
+            not_started: 'No active session. Call debug_launch to start debugging.',
+            launching: 'Session is starting. Wait a moment and check again.',
+            listening: 'Listening for Xdebug connections. Trigger your PHP script now.',
+            connected: 'Xdebug connected, execution running. Set breakpoints or call debug_pause.',
+            paused: 'Execution paused. Inspect with debug_stack_trace, debug_variables, debug_evaluate. Step with debug_next/debug_step_in/debug_step_out. Resume with debug_continue.',
+            terminated: 'Session ended. Call debug_launch to start a new session.',
+        };
+        return wrap(ok({
+            state: this.mgr.state,
+            stopInfo: this.mgr.stopInfo,
+            guidance: guidance[this.mgr.state] ?? 'Unknown state.',
+        }));
     }
 }
-exports.DebugStatusTool = DebugStatusTool;
+// --- Threads ---
 class DebugThreadsTool {
-    sessionFactory;
-    constructor(sessionFactory) {
-        this.sessionFactory = sessionFactory;
+    mgr;
+    constructor(mgr) {
+        this.mgr = mgr;
     }
-    prepareInvocation(_options, _token) {
+    prepareInvocation() {
         return { invocationMessage: 'Listing debug threads' };
     }
-    async invoke(_options, _token) {
-        if (!this.sessionFactory.session)
-            return (0, result_wrapper_js_1.wrapToolResult)(noSessionError());
-        const result = await (0, debug_threads_js_1.handleDebugThreads)(this.sessionFactory.session);
-        return (0, result_wrapper_js_1.wrapToolResult)(result);
+    async invoke() {
+        if (!this.mgr.activeSession)
+            return wrap(noSession());
+        try {
+            const body = await this.mgr.customRequest('threads');
+            const threads = (body?.threads ?? []).map((t) => ({ id: t.id, name: t.name }));
+            return wrap(ok({ threads }));
+        }
+        catch (e) {
+            return wrap(err(e instanceof Error ? e.message : String(e)));
+        }
     }
 }
-exports.DebugThreadsTool = DebugThreadsTool;
+// --- Set Breakpoints ---
 class DebugBreakpointsTool {
-    sessionFactory;
-    constructor(sessionFactory) {
-        this.sessionFactory = sessionFactory;
+    mgr;
+    constructor(mgr) {
+        this.mgr = mgr;
     }
-    prepareInvocation(options, _token) {
-        const { path, breakpoints } = options.input;
-        return {
-            invocationMessage: `Setting ${breakpoints.length} breakpoint(s) in ${path}`,
-        };
+    prepareInvocation(options) {
+        return { invocationMessage: `Setting ${options.input.breakpoints.length} breakpoint(s) in ${options.input.path}` };
     }
-    async invoke(options, _token) {
-        if (!this.sessionFactory.session)
-            return (0, result_wrapper_js_1.wrapToolResult)(noSessionError());
-        const result = await (0, debug_set_breakpoints_js_1.handleDebugSetBreakpoints)(this.sessionFactory.session, options.input);
-        return (0, result_wrapper_js_1.wrapToolResult)(result);
+    async invoke(options) {
+        if (!this.mgr.activeSession)
+            return wrap(noSession());
+        try {
+            // Pass the local path directly — xdebug.php-debug handles
+            // path mapping via its own pathMappings config
+            const body = await this.mgr.customRequest('setBreakpoints', {
+                source: { path: options.input.path },
+                breakpoints: options.input.breakpoints.map((bp) => ({
+                    line: bp.line,
+                    ...(bp.condition !== undefined ? { condition: bp.condition } : {}),
+                    ...(bp.hitCondition !== undefined ? { hitCondition: bp.hitCondition } : {}),
+                    ...(bp.logMessage !== undefined ? { logMessage: bp.logMessage } : {}),
+                })),
+            });
+            const breakpoints = (body?.breakpoints ?? []).map((bp) => ({
+                verified: bp.verified,
+                line: bp.line,
+                id: bp.id,
+                message: bp.message,
+            }));
+            return wrap(ok({
+                path: options.input.path,
+                breakpoints,
+                message: `Set ${breakpoints.length} breakpoint(s) in ${options.input.path}`,
+            }));
+        }
+        catch (e) {
+            return wrap(err(e instanceof Error ? e.message : String(e)));
+        }
     }
 }
-exports.DebugBreakpointsTool = DebugBreakpointsTool;
-// --- 5.6: DebugBreakpointsGetTool (Requirements 3.1, 4.6, 12.7, 12.8) ---
-class DebugBreakpointsGetTool {
-    sessionFactory;
-    constructor(sessionFactory) {
-        this.sessionFactory = sessionFactory;
-    }
-    prepareInvocation(options, _token) {
-        return { invocationMessage: `Reading breakpoints for ${options.input.path}` };
-    }
-    async invoke(options, _token) {
-        const ledger = this.sessionFactory.breakpointLedger;
-        if (!ledger)
-            return (0, result_wrapper_js_1.wrapToolResult)(noSessionError());
-        const breakpoints = ledger.getForFile(options.input.path);
-        const result = { success: true, data: { path: options.input.path, breakpoints } };
-        return (0, result_wrapper_js_1.wrapToolResult)(result);
-    }
-}
-exports.DebugBreakpointsGetTool = DebugBreakpointsGetTool;
-// --- 5.8: registerAllLmTools (Requirements 2.1, 2.3) ---
-function registerAllLmTools(context, sessionFactory) {
+// --- Register all tools ---
+function registerAllLmTools(context, mgr) {
     const tools = [
-        ['debug_launch', new DebugLaunchTool(sessionFactory)],
-        ['debug_terminate', new DebugTerminateTool(sessionFactory)],
-        ['debug_status', new DebugStatusTool(sessionFactory)],
-        ['debug_continue', new DebugContinueTool(sessionFactory)],
-        ['debug_next', new DebugNextTool(sessionFactory)],
-        ['debug_step_in', new DebugStepInTool(sessionFactory)],
-        ['debug_step_out', new DebugStepOutTool(sessionFactory)],
-        ['debug_pause', new DebugPauseTool(sessionFactory)],
-        ['debug_stack_trace', new DebugStackTraceTool(sessionFactory)],
-        ['debug_scopes', new DebugScopesTool(sessionFactory)],
-        ['debug_variables', new DebugVariablesTool(sessionFactory)],
-        ['debug_evaluate', new DebugEvaluateTool(sessionFactory)],
-        ['debug_threads', new DebugThreadsTool(sessionFactory)],
-        ['debug_breakpoints', new DebugBreakpointsTool(sessionFactory)],
-        ['debug_breakpoints_get', new DebugBreakpointsGetTool(sessionFactory)],
+        ['debug_launch', new DebugLaunchTool(mgr)],
+        ['debug_terminate', new DebugTerminateTool(mgr)],
+        ['debug_status', new DebugStatusTool(mgr)],
+        ['debug_continue', new DebugContinueTool(mgr)],
+        ['debug_next', new DebugNextTool(mgr)],
+        ['debug_step_in', new DebugStepInTool(mgr)],
+        ['debug_step_out', new DebugStepOutTool(mgr)],
+        ['debug_pause', new DebugPauseTool(mgr)],
+        ['debug_stack_trace', new DebugStackTraceTool(mgr)],
+        ['debug_scopes', new DebugScopesTool(mgr)],
+        ['debug_variables', new DebugVariablesTool(mgr)],
+        ['debug_evaluate', new DebugEvaluateTool(mgr)],
+        ['debug_threads', new DebugThreadsTool(mgr)],
+        ['debug_breakpoints', new DebugBreakpointsTool(mgr)],
     ];
     for (const [name, tool] of tools) {
         context.subscriptions.push(vscode.lm.registerTool(name, tool));

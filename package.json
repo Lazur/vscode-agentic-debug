@@ -13,52 +13,9 @@
   ],
   "main": "./out/extension.js",
   "activationEvents": [
-    "onLanguageModelTool:debug_launch",
-    "onDebugResolve:php-agent"
+    "onLanguageModelTool:debug_launch"
   ],
   "contributes": {
-    "debuggers": [
-      {
-        "type": "php-agent",
-        "label": "PHP (Agent-Controlled)",
-        "configurationAttributes": {
-          "launch": {
-            "properties": {
-              "backendMode": {
-                "type": "string",
-                "enum": ["headless", "ui"],
-                "description": "Backend mode: headless (direct DAP) or ui (VS Code debug UI)",
-                "default": "ui"
-              },
-              "agentSessionId": {
-                "type": "string",
-                "description": "Internal agent session tracking identifier"
-              }
-            }
-          }
-        },
-        "initialConfigurations": [
-          {
-            "type": "php-agent",
-            "request": "launch",
-            "name": "PHP (Agent-Controlled)",
-            "backendMode": "ui"
-          }
-        ],
-        "configurationSnippets": [
-          {
-            "label": "PHP (Agent-Controlled): Launch",
-            "description": "Launch a PHP debug session controlled by the AI agent",
-            "body": {
-              "type": "php-agent",
-              "request": "launch",
-              "name": "PHP (Agent-Controlled)",
-              "backendMode": "ui"
-            }
-          }
-        ]
-      }
-    ],
     "configuration": {
       "title": "Agentic Debug",
       "properties": {
@@ -99,7 +56,7 @@
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "debugLaunch",
         "icon": "$(debug-start)",
-        "modelDescription": "Start a PHP debug session. Choose backendMode 'ui' for visual/collaborative debugging with VS Code debug UI, or 'headless' for automated/background debugging. Call this FIRST before any other debug tools. After launching, set breakpoints, trigger PHP execution, then use debug_status to detect breakpoint hits.",
+        "modelDescription": "Start a PHP debug session using xdebug.php-debug. Call this FIRST before any other debug tools.\n\nWorkflow after launching:\n1. Read the PHP source code you want to debug\n2. Call debug_launch to start the session\n3. Set breakpoints with debug_breakpoints at key locations\n4. Trigger PHP execution (e.g. run the script or hit the endpoint)\n5. Use debug_status to detect when Xdebug connects and hits a breakpoint\n6. Inspect state with debug_stack_trace, debug_variables, debug_evaluate\n7. Step through code with debug_next, debug_step_in, debug_step_out\n8. Continue with debug_continue or terminate with debug_terminate\n\nBreakpoints can be set at any time after launch. pathMappings are passed directly to xdebug.php-debug which handles all path translation.",
         "userDescription": "Launch a PHP/Xdebug debug session",
         "inputSchema": {
           "type": "object",
@@ -108,19 +65,22 @@
               "type": "number",
               "description": "Xdebug listen port (default: from settings or 9003)"
             },
-            "backendMode": {
-              "type": "string",
-              "enum": ["headless", "ui"],
-              "description": "Backend mode: 'ui' for VS Code debug UI (default), 'headless' for direct DAP"
-            },
             "pathMappings": {
               "type": "object",
               "additionalProperties": { "type": "string" },
-              "description": "Server-to-local path mappings (Record<string, string>)"
+              "description": "Server-to-local path mappings, e.g. {\"/var/www/html\": \"/Users/me/project\"}"
             },
             "stopOnEntry": {
               "type": "boolean",
               "description": "Pause on first line when Xdebug connects"
+            },
+            "hostname": {
+              "type": "string",
+              "description": "Hostname to listen on (default: 127.0.0.1)"
+            },
+            "log": {
+              "type": "boolean",
+              "description": "Enable xdebug.php-debug adapter logging"
             }
           }
         }
@@ -144,7 +104,7 @@
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "debugStatus",
         "icon": "$(info)",
-        "modelDescription": "Get current debug session state and guidance. States: not_started, initializing, listening, connected, paused, terminated. Call after triggering PHP execution to detect breakpoint hits. Callable in any state.",
+        "modelDescription": "Get current debug session state and guidance. Call AFTER triggering PHP execution to detect when Xdebug connects and hits a breakpoint. Callable in any state.\n\nState guide:\n- not_started: No session active. Call debug_launch first.\n- launching: Session is starting up. Wait and check again.\n- listening: Adapter is ready, waiting for Xdebug connection. Trigger your PHP script now.\n- connected: Xdebug connected, execution is running. Set breakpoints or call debug_pause.\n- paused: Execution stopped at a breakpoint or step. Inspect with debug_stack_trace, debug_variables, debug_evaluate. Step with debug_next, debug_step_in, debug_step_out. Resume with debug_continue.\n- terminated: Session ended. Call debug_launch to start a new session.",
         "userDescription": "Check debug session status",
         "inputSchema": {
           "type": "object",
@@ -157,7 +117,7 @@
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "debugContinue",
         "icon": "$(debug-continue)",
-        "modelDescription": "Continue execution until next breakpoint. Requires paused state. After continuing, use debug_status to detect next stop.",
+        "modelDescription": "Continue running until next breakpoint. Use after inspecting state at current breakpoint. Requires paused state. After continuing, use debug_status to detect when execution stops again at the next breakpoint or completes.",
         "userDescription": "Resume execution until next breakpoint",
         "inputSchema": {
           "type": "object",
@@ -175,7 +135,7 @@
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "debugNext",
         "icon": "$(debug-step-over)",
-        "modelDescription": "Step over — execute current line, pause at next line. Does not enter function calls. Requires paused state.",
+        "modelDescription": "Step over — execute current line, pause at next. Use to trace line by line without entering functions. Requires paused state. After stepping, use debug_status to detect when execution pauses at the next line.",
         "userDescription": "Step over to next line",
         "inputSchema": {
           "type": "object",
@@ -193,7 +153,7 @@
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "debugStepIn",
         "icon": "$(debug-step-into)",
-        "modelDescription": "Step into — enter function call on current line. Use to inspect inside a function. Requires paused state.",
+        "modelDescription": "Step into — enter function call on current line. Use when you need to see inside a function. Requires paused state. After stepping in, use debug_status to detect when execution pauses inside the function.",
         "userDescription": "Step into function call",
         "inputSchema": {
           "type": "object",
@@ -211,7 +171,7 @@
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "debugStepOut",
         "icon": "$(debug-step-out)",
-        "modelDescription": "Step out — run until current function returns. Use when done inspecting a function. Requires paused state.",
+        "modelDescription": "Step out — run until current function returns. Use when done inspecting this function. Requires paused state. After stepping out, use debug_status to detect when execution pauses in the calling function.",
         "userDescription": "Step out of current function",
         "inputSchema": {
           "type": "object",
@@ -229,7 +189,7 @@
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "debugPause",
         "icon": "$(debug-pause)",
-        "modelDescription": "Pause running execution. Requires connected (running) state. After pausing, inspect with debug_stack_trace, debug_variables, debug_evaluate.",
+        "modelDescription": "Pause running execution. Use when execution is running and you want to inspect current state. Requires connected (running) state. After pausing, use debug_stack_trace, debug_variables, debug_evaluate to inspect.",
         "userDescription": "Pause running execution",
         "inputSchema": {
           "type": "object",
@@ -247,7 +207,7 @@
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "debugBreakpoints",
         "icon": "$(debug-breakpoint)",
-        "modelDescription": "Set breakpoints in a file (replaces all existing breakpoints in that file). Read source first to identify key locations. Supports conditional breakpoints and hit conditions. Can be called in listening, connected, or paused state.",
+        "modelDescription": "Set breakpoints in a file (replaces all existing breakpoints in that file). STRATEGY: Read source first to identify key locations — function entries, conditionals, error handlers. Set multiple across the call chain.\n\nEach call replaces ALL breakpoints in the specified file. To clear breakpoints, call with an empty array. Supports conditional breakpoints and hit conditions. Use local file paths — xdebug.php-debug handles path mapping to remote paths automatically.\n\nCan be called in listening, connected, or paused state.",
         "userDescription": "Set breakpoints in a PHP source file",
         "inputSchema": {
           "type": "object",
@@ -283,31 +243,12 @@
         }
       },
       {
-        "name": "debug_breakpoints_get",
-        "displayName": "Debug: Get Breakpoints",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "debugBreakpointsGet",
-        "icon": "$(debug-breakpoint)",
-        "modelDescription": "Get currently active breakpoints for a file from the BreakpointLedger. Works in both headless and UI modes. Returns breakpoints tracked by the agent during the session.",
-        "userDescription": "Read current breakpoints for a file",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "path": {
-              "type": "string",
-              "description": "Source file path to get breakpoints for"
-            }
-          },
-          "required": ["path"]
-        }
-      },
-      {
         "name": "debug_stack_trace",
         "displayName": "Debug: Stack Trace",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "debugStackTrace",
         "icon": "$(debug-stackframe)",
-        "modelDescription": "Get call stack when paused. Shows chain of function calls to current location. Each frame has an ID for use with debug_scopes and debug_evaluate. Requires paused state.",
+        "modelDescription": "Get call stack when paused. Shows the chain of calls to current location. Each frame has an ID — use with debug_scopes and debug_evaluate to inspect that frame's context. Source file paths are returned as local paths (xdebug.php-debug handles path mapping). Requires paused state.",
         "userDescription": "View the call stack",
         "inputSchema": {
           "type": "object",
@@ -320,7 +261,7 @@
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "debugScopes",
         "icon": "$(symbol-namespace)",
-        "modelDescription": "Get variable scopes for a stack frame. Returns locals, globals, superglobals with variablesReference values. Use frameId from debug_stack_trace. Requires paused state.",
+        "modelDescription": "Get variable scopes for a stack frame. Returns available scopes (locals, globals, superglobals) with their variablesReference values. Use the frameId from debug_stack_trace. Then use the returned variablesReference with debug_variables to inspect variables in each scope. Requires paused state.",
         "userDescription": "View variable scopes for a stack frame",
         "inputSchema": {
           "type": "object",
@@ -339,7 +280,7 @@
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "debugVariables",
         "icon": "$(symbol-variable)",
-        "modelDescription": "Get variables for a scope or object. Use variablesReference from debug_scopes, debug_evaluate, or a previous debug_variables call to drill into nested objects/arrays. Requires paused state.",
+        "modelDescription": "Get variables for a scope or object. Returns variable names, values, types. Use variablesReference to drill into objects/arrays — the variablesReference comes from debug_scopes (for top-level scopes), debug_evaluate (for expression results), or a previous debug_variables call (for nested objects/arrays). Requires paused state.",
         "userDescription": "Inspect variables in a scope",
         "inputSchema": {
           "type": "object",
@@ -366,7 +307,7 @@
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "debugEvaluate",
         "icon": "$(terminal)",
-        "modelDescription": "Evaluate a PHP expression in paused context. Examples: '$user->getRoles()', 'count($items)'. Use frameId from debug_stack_trace to evaluate in a specific frame. Requires paused state.",
+        "modelDescription": "Evaluate PHP expression in paused context. Examples: '$user->getRoles()', 'count($items)', '$request->getMethod()'. Use to test hypotheses about bugs. Use frameId from debug_stack_trace to evaluate in a specific stack frame's context. Returns the result value, type, and a variablesReference for drilling into objects/arrays with debug_variables. Requires paused state.",
         "userDescription": "Evaluate a PHP expression",
         "inputSchema": {
           "type": "object",
@@ -394,7 +335,7 @@
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "debugThreads",
         "icon": "$(list-tree)",
-        "modelDescription": "List all active threads in the debug session. Returns thread IDs and names. Use thread IDs with step/continue commands. Requires connected or paused state.",
+        "modelDescription": "List all active threads in the debug session. Returns thread IDs and names. Use thread IDs with step/continue commands and debug_stack_trace. Requires connected or paused state.",
         "userDescription": "List active debug threads",
         "inputSchema": {
           "type": "object",
@@ -410,10 +351,8 @@
     "test": "vitest --run"
   },
   "devDependencies": {
-    "ts-php-debug-mcp": "file:../ts-php-debug-mcp",
     "@types/vscode": "^1.95.0",
     "@types/node": "^25.2.3",
-    "@vscode/debugprotocol": "^1.68.0",
     "esbuild": "^0.27.3",
     "fast-check": "^4.5.3",
     "typescript": "^5.9.3",
