@@ -394,6 +394,7 @@
   "devDependencies": {
     "@types/vscode": "^1.95.0",
     "@types/node": "^25.2.3",
+    "@vscode/debugprotocol": "^1.68.0",
     "esbuild": "^0.27.3",
     "fast-check": "^4.5.3",
     "typescript": "^5.9.3",
