@@ -1,29 +1,31 @@
 import * as vscode from 'vscode';
-import { DebugSessionManager } from './debug-session-manager.js';
+import { SessionFactory } from './session-factory.js';
+import { VsCodeNotificationSender } from './notification-sender.js';
 import { registerAllLmTools } from './lm-tools.js';
 
-let sessionManager: DebugSessionManager | undefined;
+let sessionFactory: SessionFactory | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   const outputChannel = vscode.window.createOutputChannel('Agentic Debug');
-
-  sessionManager = new DebugSessionManager(outputChannel);
+  const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left);
+  const notifier = new VsCodeNotificationSender(outputChannel, statusBarItem);
+  sessionFactory = new SessionFactory(notifier, outputChannel);
 
   // Register LM Tools if the API is available
   if (typeof vscode.lm?.registerTool === 'function') {
-    registerAllLmTools(context, sessionManager);
+    registerAllLmTools(context, sessionFactory);
   } else {
     outputChannel.appendLine(
       '[WARN] vscode.lm.registerTool not available — LM tool registration skipped',
     );
   }
 
-  context.subscriptions.push(outputChannel);
+  context.subscriptions.push(outputChannel, statusBarItem);
 }
 
 export async function deactivate(): Promise<void> {
-  if (sessionManager) {
-    await sessionManager.terminate();
-    sessionManager = undefined;
+  if (sessionFactory) {
+    await sessionFactory.terminate();
+    sessionFactory = undefined;
   }
 }

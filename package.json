@@ -56,7 +56,7 @@
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "debugLaunch",
         "icon": "$(debug-start)",
-        "modelDescription": "Start a PHP debug session using xdebug.php-debug. Call this FIRST before any other debug tools.\n\nWorkflow after launching:\n1. Read the PHP source code you want to debug\n2. Call debug_launch to start the session\n3. Set breakpoints with debug_breakpoints at key locations\n4. Trigger PHP execution (e.g. run the script or hit the endpoint)\n5. Use debug_status to detect when Xdebug connects and hits a breakpoint\n6. Inspect state with debug_stack_trace, debug_variables, debug_evaluate\n7. Step through code with debug_next, debug_step_in, debug_step_out\n8. Continue with debug_continue or terminate with debug_terminate\n\nBreakpoints can be set at any time after launch. pathMappings are passed directly to xdebug.php-debug which handles all path translation.",
+        "modelDescription": "Start a PHP debug session. Call this FIRST before any other debug tools.\n\nIMPORTANT: Pass all parameters as FLAT top-level properties. Do NOT wrap them in a 'configuration' object.\n\nCorrect:   {\"port\": 9003, \"pathMappings\": {\"/var/www/html\": \"/local/path\"}}\nINCORRECT: {\"configuration\": {\"port\": 9003, \"pathMappings\": {...}}}\n\npathMappings: Required for Docker/remote debugging. Maps server paths to local paths so breakpoints and stack traces resolve correctly. Example: {\"/var/www/html\": \"/Users/me/project\"}. If omitted, the tool falls back to VS Code settings or launch.json.\n\nbackendMode: 'ui' (default) for visual debugging with VS Code debug UI, 'headless' for automated/background debugging.\n\nWorkflow after launching:\n1. Read the PHP source code you want to debug\n2. Call debug_launch with pathMappings if using Docker/remote\n3. Set breakpoints with debug_breakpoints at key locations\n4. Trigger PHP execution (e.g. run the script or hit the endpoint)\n5. Use debug_status to detect when Xdebug connects and hits a breakpoint\n6. Inspect state with debug_stack_trace, debug_variables, debug_evaluate\n7. Step through code with debug_next, debug_step_in, debug_step_out\n8. Continue with debug_continue or terminate with debug_terminate",
         "userDescription": "Launch a PHP/Xdebug debug session",
         "inputSchema": {
           "type": "object",
@@ -64,6 +64,11 @@
             "port": {
               "type": "number",
               "description": "Xdebug listen port (default: from settings or 9003)"
+            },
+            "backendMode": {
+              "type": "string",
+              "enum": ["headless", "ui"],
+              "description": "Backend mode: 'ui' for VS Code debug UI (default), 'headless' for direct DAP"
             },
             "pathMappings": {
               "type": "object",
@@ -243,6 +248,25 @@
         }
       },
       {
+        "name": "debug_breakpoints_get",
+        "displayName": "Debug: Get Breakpoints",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "debugBreakpointsGet",
+        "icon": "$(debug-breakpoint)",
+        "modelDescription": "Get currently active breakpoints for a file from the BreakpointLedger. Works in both headless and UI modes. Returns breakpoints tracked by the agent during the session.",
+        "userDescription": "Read current breakpoints for a file",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Source file path to get breakpoints for"
+            }
+          },
+          "required": ["path"]
+        }
+      },
+      {
         "name": "debug_stack_trace",
         "displayName": "Debug: Stack Trace",
         "canBeReferencedInPrompt": true,
@@ -351,8 +375,10 @@
     "test": "vitest --run"
   },
   "devDependencies": {
+    "ts-php-debug-mcp": "file:../ts-php-debug-mcp",
     "@types/vscode": "^1.95.0",
     "@types/node": "^25.2.3",
+    "@vscode/debugprotocol": "^1.68.0",
     "esbuild": "^0.27.3",
     "fast-check": "^4.5.3",
     "typescript": "^5.9.3",

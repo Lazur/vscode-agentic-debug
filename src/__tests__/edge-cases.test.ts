@@ -1,7 +1,7 @@
 /**
  * Unit tests for edge cases (Task 9).
  * Covers: runtime compatibility (9.1), error scenarios (9.2),
- * DebugConfigurationProvider (9.3), notification sender status bar (9.4),
+ * notification sender status bar (9.4),
  * SessionFactory (9.5), VsCodeDebugBackend (9.6).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -123,14 +123,12 @@ vi.mock('../vscode-debug-backend.js', () => {
   }
   return {
     VsCodeDebugBackend: MockVsCodeDebugBackend,
-    isAgentSession: (session: any) =>
-      session.type === 'php' && session.configuration?.__agentInitiated === true,
+    isAgentSession: (session: any) => session.type === 'php',
   };
 });
 
 
 // Import modules under test
-import { PhpAgentConfigProvider } from '../config-provider.js';
 import { VsCodeNotificationSender } from '../notification-sender.js';
 import { SessionFactory } from '../session-factory.js';
 
@@ -223,44 +221,7 @@ describe('9.2: Error scenarios', () => {
 });
 
 
-// ============================================================
-// 9.3: DebugConfigurationProvider
-// ============================================================
 
-describe('9.3: DebugConfigurationProvider', () => {
-  it('transforms php-agent type to php', () => {
-    const provider = new PhpAgentConfigProvider();
-    const config = {
-      type: 'php-agent', name: 'Test', request: 'launch',
-      port: 9003, backendMode: 'ui', agentSessionId: 'abc-123',
-    } as any;
-
-    const result = provider.resolveDebugConfiguration(undefined, config);
-    expect(result!.type).toBe('php');
-  });
-
-  it('adds __agentInitiated marker', () => {
-    const provider = new PhpAgentConfigProvider();
-    const config = { type: 'php-agent', name: 'Test', request: 'launch' } as any;
-
-    const result = provider.resolveDebugConfiguration(undefined, config);
-    expect(result!.__agentInitiated).toBe(true);
-  });
-
-  it('strips backendMode and agentSessionId from output', () => {
-    const provider = new PhpAgentConfigProvider();
-    const config = {
-      type: 'php-agent', name: 'Test', request: 'launch',
-      port: 9003, backendMode: 'headless', agentSessionId: 'session-42',
-    } as any;
-
-    const result = provider.resolveDebugConfiguration(undefined, config) as any;
-    expect(result).not.toHaveProperty('backendMode');
-    expect(result).not.toHaveProperty('agentSessionId');
-    expect(result.port).toBe(9003);
-    expect(result.name).toBe('Test');
-  });
-});
 
 // ============================================================
 // 9.4: VsCodeNotificationSender status bar
@@ -403,7 +364,7 @@ describe('9.5: SessionFactory', () => {
 // ============================================================
 
 describe('9.6: VsCodeDebugBackend', () => {
-  it('buildDebugConfig sets type php-agent and __agentInitiated true', async () => {
+  it('buildDebugConfig sets type php directly (no php-agent, no __agentInitiated)', async () => {
     // Use the real VsCodeDebugBackend
     vi.doUnmock('../vscode-debug-backend.js');
     const { VsCodeDebugBackend } = await import('../vscode-debug-backend.js');
@@ -416,7 +377,7 @@ describe('9.6: VsCodeDebugBackend', () => {
       capturedConfig = cfg;
       const session = {
         id: 'test-1', type: 'php', name: 'Test',
-        configuration: { ...cfg, type: 'php', __agentInitiated: true },
+        configuration: { ...cfg, type: 'php' },
         customRequest: vi.fn().mockResolvedValue({}),
       };
       setTimeout(() => {
@@ -428,62 +389,35 @@ describe('9.6: VsCodeDebugBackend', () => {
 
     await backend.launch({ port: 9003 } as any);
 
-    expect(capturedConfig.type).toBe('php-agent');
-    expect(capturedConfig.__agentInitiated).toBe(true);
+    expect(capturedConfig.type).toBe('php');
+    expect(capturedConfig).not.toHaveProperty('__agentInitiated');
 
     await backend.disconnect();
     vi.doMock('../vscode-debug-backend.js');
   });
 
-  it('isAgentSession filters on session.type php + __agentInitiated marker', async () => {
+  it('isAgentSession matches any session with type php', async () => {
     vi.doUnmock('../vscode-debug-backend.js');
     const { isAgentSession } = await import('../vscode-debug-backend.js');
 
-    // Agent session: type=php, __agentInitiated=true
+    // PHP session: matches
     expect(isAgentSession({
       id: 'a', type: 'php', name: 'A',
-      configuration: { type: 'php', __agentInitiated: true },
+      configuration: { type: 'php' },
     } as any)).toBe(true);
 
-    // Non-agent: type=php, no marker
+    // PHP session without __agentInitiated: still matches
     expect(isAgentSession({
       id: 'b', type: 'php', name: 'B',
       configuration: { type: 'php' },
-    } as any)).toBe(false);
+    } as any)).toBe(true);
 
-    // Non-php with marker
+    // Non-php type: does not match
     expect(isAgentSession({
       id: 'c', type: 'node', name: 'C',
-      configuration: { type: 'node', __agentInitiated: true },
+      configuration: { type: 'node' },
     } as any)).toBe(false);
 
-    vi.doMock('../vscode-debug-backend.js');
-  });
-
-  it('session tracking Map: add on start, remove on terminate', async () => {
-    vi.doUnmock('../vscode-debug-backend.js');
-    const { VsCodeDebugBackend } = await import('../vscode-debug-backend.js');
-
-    const backend = new VsCodeDebugBackend();
-    await backend.initialize();
-
-    const session = {
-      id: 'tracked-1', type: 'php', name: 'Tracked',
-      configuration: { type: 'php', __agentInitiated: true },
-      customRequest: vi.fn(),
-    };
-
-    // Fire session start
-    const startListeners = (vscode.debug.onDidStartDebugSession as any).listeners;
-    for (const l of startListeners) l(session);
-    expect(backend.getAgentSessions().has('tracked-1')).toBe(true);
-
-    // Fire session terminate
-    const termListeners = (vscode.debug.onDidTerminateDebugSession as any).listeners;
-    for (const l of termListeners) l(session);
-    expect(backend.getAgentSessions().has('tracked-1')).toBe(false);
-
-    await backend.disconnect();
     vi.doMock('../vscode-debug-backend.js');
   });
 });

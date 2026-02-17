@@ -8,7 +8,6 @@ The extension is a thin adapter layer over the backend-agnostic tool handlers fr
 
 - 15 Language Model Tools registered via `vscode.lm.registerTool()`
 - Two backend modes: **UI** (native VS Code debug UI) and **headless** (direct DAP over stdio)
-- Custom `php-agent` debug type that delegates to `xdebug.php-debug`
 - Singleton session management via `SessionFactory`
 - Three-tier config merge: tool params → VS Code settings → hardcoded defaults
 - Breakpoint ledger tracking across both modes
@@ -49,7 +48,7 @@ npm run bundle
 ln -s "$(pwd)" ~/.vscode/extensions/vscode-agentic-debug
 ```
 
-Restart VS Code. The extension activates when Copilot invokes `debug_launch` or when a `php-agent` debug config is resolved.
+Restart VS Code. The extension activates when Copilot invokes `debug_launch`.
 
 ### Option B: Package as VSIX
 
@@ -123,6 +122,62 @@ Settings are contributed under `agenticDebug.*` in VS Code:
 | `agenticDebug.maxConnections` | number | `0` | Max Xdebug connections (0 = unlimited) |
 
 Tool parameters passed to `debug_launch` override VS Code settings, which override hardcoded defaults.
+
+## How the Agent Launches a Session
+
+When Copilot (or any LM agent) calls `debug_launch`, it passes a flat JSON object with these parameters:
+
+```json
+{
+  "port": 9003,
+  "backendMode": "ui",
+  "pathMappings": { "/var/www/html": "/Users/me/project" },
+  "stopOnEntry": true,
+  "hostname": "127.0.0.1",
+  "log": false
+}
+```
+
+All fields are optional. Here's what each one does:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `port` | number | `9003` (or from settings) | Xdebug listen port |
+| `backendMode` | `"ui"` \| `"headless"` | `"ui"` | Which debug backend to use (see below) |
+| `pathMappings` | object | `{}` (falls back to settings → launch.json) | Server-to-local path mappings for Docker/remote |
+| `stopOnEntry` | boolean | `true` (or from settings) | Pause on the first line when Xdebug connects |
+| `hostname` | string | `"127.0.0.1"` (or from settings) | Hostname to listen on |
+| `log` | boolean | `false` | Enable xdebug.php-debug adapter logging |
+
+### Backend modes
+
+The `backendMode` parameter controls how the debug session runs:
+
+- **`"ui"` (default)** — Uses `VsCodeDebugBackend`, which calls `vscode.debug.startDebugging()` with `type: 'php'`. The developer sees the full VS Code debug UI: pause indicators, call stack panel, variable inspector, gutter breakpoints. The agent still has full programmatic control via the other tools. Use this when the user is actively watching or collaborating.
+
+- **`"headless"`** — Uses `DAPClient`, which spawns `phpDebug.js` directly over stdio. No VS Code debug UI is shown. The agent communicates with the debug adapter directly via DAP protocol. Use this for automated investigation, batch debugging, or CI-like scenarios where no human is watching.
+
+### pathMappings resolution
+
+When the agent calls `debug_launch`, pathMappings are resolved through a fallback chain:
+
+1. **Tool parameters** — `pathMappings` passed directly in the `debug_launch` call (highest priority)
+2. **VS Code settings** — `agenticDebug.pathMappings` from workspace/user settings
+3. **launch.json** — First PHP config (`type: "php"`) with non-empty `pathMappings` found in `.vscode/launch.json`
+4. **Empty `{}`** — No mapping (works for local-only debugging, breaks Docker/remote setups)
+
+Empty objects (`{}`) are treated the same as `undefined` at each tier, so the chain falls through correctly when the agent sends `pathMappings: {}`.
+
+### Input format
+
+Parameters must be flat top-level properties. The agent should NOT wrap them in a `configuration` object:
+
+```
+✓ Correct:   { "port": 9003, "pathMappings": { "/var/www/html": "/local" } }
+✗ Incorrect: { "configuration": { "port": 9003, "pathMappings": { ... } } }
+```
+
+The extension includes a defensive unwrap for the nested format, but the correct format is flat.
 
 ## Example: Prompting the Agent to Debug
 

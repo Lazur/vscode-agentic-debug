@@ -198,28 +198,26 @@ describe('Feature: vscode-agentic-debug, Property 2: prepareInvocation confirmat
 
 describe('Feature: vscode-agentic-debug, Property 3: prepareInvocation message content for debug_launch', () => {
   /**
-   * **Validates: Requirements 4.1**
+   * **Validates: Requirements 5.1**
    *
-   * For any valid LaunchInput with backendMode and port values,
-   * prepareInvocation() returns a message containing both values.
+   * For any valid LaunchInput with port values,
+   * prepareInvocation() returns a confirmation message containing the port.
    */
-  it('confirmation message includes backend mode and port', () => {
+  it('confirmation message includes port', () => {
     const sf = makeSessionFactory();
     const tool = new DebugLaunchTool(sf);
 
     fc.assert(
       fc.property(
-        fc.constantFrom('headless' as const, 'ui' as const),
         fc.integer({ min: 1024, max: 65535 }),
-        (mode, port) => {
+        (port) => {
           const result = tool.prepareInvocation(
-            { input: { backendMode: mode, port } } as any,
+            { input: { port } } as any,
             dummyToken,
           ) as any;
 
           const msg = result.confirmationMessages.message;
           const text = typeof msg === 'string' ? msg : msg.value;
-          expect(text).toContain(mode);
           expect(text).toContain(String(port));
         },
       ),

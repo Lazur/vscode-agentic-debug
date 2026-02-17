@@ -1,64 +1,33 @@
 import * as vscode from 'vscode';
-import type { DebugSessionManager } from './debug-session-manager.js';
-
-// --- Types ---
-
-interface ToolResult {
-  success: boolean;
-  data?: unknown;
-  error?: { message: string; code: string };
-}
-
-function ok(data: unknown): ToolResult {
-  return { success: true, data };
-}
-
-function err(message: string, code = 'DAP_ERROR'): ToolResult {
-  return { success: false, error: { message, code } };
-}
-
-function wrap(result: ToolResult): vscode.LanguageModelToolResult {
-  const payload = result.success ? result.data : result.error;
-  return new vscode.LanguageModelToolResult([
-    new vscode.LanguageModelTextPart(JSON.stringify(payload, null, 2)),
-  ]);
-}
-
-function noSession(): ToolResult {
-  return err('No active debug session. Call debug_launch first.', 'SESSION_NOT_STARTED');
-}
-
-// --- Input types ---
-
-interface LaunchInput {
-  port?: number;
-  pathMappings?: Record<string, string>;
-  stopOnEntry?: boolean;
-  hostname?: string;
-  log?: boolean;
-}
-
-interface ThreadIdInput { threadId?: number; }
-interface ScopesInput { frameId: number; }
-interface VariablesInput { variablesReference: number; start?: number; count?: number; }
-interface EvaluateInput { expression: string; frameId?: number; context?: string; }
-interface BreakpointsInput {
-  path: string;
-  breakpoints: Array<{ line: number; condition?: string; hitCondition?: string; logMessage?: string }>;
-}
-
-// --- Helper: resolve threadId from input or last stopped thread ---
-
-function resolveThreadId(mgr: DebugSessionManager, input: ThreadIdInput): number | ToolResult {
-  if (input.threadId !== undefined) return input.threadId;
-  if (mgr.stopInfo) return mgr.stopInfo.threadId;
-  return err('threadId is required — no stopped thread available', 'INVALID_PARAMS');
-}
+import { errorResult } from 'ts-php-debug-mcp/tools/types.js';
+import { handleDebugContinue } from 'ts-php-debug-mcp/tools/debug-continue.js';
+import { handleDebugNext } from 'ts-php-debug-mcp/tools/debug-next.js';
+import { handleDebugStepIn } from 'ts-php-debug-mcp/tools/debug-step-in.js';
+import { handleDebugStepOut } from 'ts-php-debug-mcp/tools/debug-step-out.js';
+import { handleDebugPause } from 'ts-php-debug-mcp/tools/debug-pause.js';
+import { handleDebugStackTrace } from 'ts-php-debug-mcp/tools/debug-stack-trace.js';
+import { handleDebugScopes } from 'ts-php-debug-mcp/tools/debug-scopes.js';
+import { handleDebugVariables } from 'ts-php-debug-mcp/tools/debug-variables.js';
+import { handleDebugEvaluate } from 'ts-php-debug-mcp/tools/debug-evaluate.js';
+import { handleDebugStatus } from 'ts-php-debug-mcp/tools/debug-status.js';
+import { handleDebugThreads } from 'ts-php-debug-mcp/tools/debug-threads.js';
+import { handleDebugSetBreakpoints } from 'ts-php-debug-mcp/tools/debug-set-breakpoints.js';
+import { wrapToolResult, noSessionResult } from './result-wrapper.js';
+import type { SessionFactory } from './session-factory.js';
+import type {
+  LaunchInput,
+  ThreadIdInput,
+  ScopesInput,
+  VariablesInput,
+  EvaluateInput,
+  BreakpointsInput,
+  BreakpointsGetInput,
+} from './types.js';
 
 // --- Launch ---
 
-class DebugLaunchTool implements vscode.LanguageModelTool<LaunchInput> {
-  constructor(private readonly mgr: DebugSessionManager) {}
+export class DebugLaunchTool implements vscode.LanguageModelTool<LaunchInput> {
+  constructor(private readonly sf: SessionFactory) {}
 
   prepareInvocation(
     options: vscode.LanguageModelToolInvocationPrepareOptions<LaunchInput>,
@@ -77,22 +46,16 @@ class DebugLaunchTool implements vscode.LanguageModelTool<LaunchInput> {
     options: vscode.LanguageModelToolInvocationOptions<LaunchInput>,
     _token: vscode.CancellationToken,
   ): Promise<vscode.LanguageModelToolResult> {
-    try {
-      await this.mgr.launch(options.input);
-      return wrap(ok({
-        status: this.mgr.state,
-        message: `Debug session launched, listening on port ${options.input.port ?? 9003}`,
-      }));
-    } catch (e: unknown) {
-      return wrap(err(e instanceof Error ? e.message : String(e)));
-    }
+    const result = await this.sf.launch(options.input);
+    return wrapToolResult(result);
   }
 }
 
+
 // --- Terminate ---
 
-class DebugTerminateTool implements vscode.LanguageModelTool<Record<string, never>> {
-  constructor(private readonly mgr: DebugSessionManager) {}
+export class DebugTerminateTool implements vscode.LanguageModelTool<Record<string, never>> {
+  constructor(private readonly sf: SessionFactory) {}
 
   prepareInvocation(): vscode.ProviderResult<vscode.PreparedToolInvocation> {
     return {
@@ -104,53 +67,118 @@ class DebugTerminateTool implements vscode.LanguageModelTool<Record<string, neve
   }
 
   async invoke(): Promise<vscode.LanguageModelToolResult> {
-    try {
-      await this.mgr.terminate();
-      return wrap(ok({ status: 'terminated', message: 'Debug session terminated' }));
-    } catch (e: unknown) {
-      return wrap(err(e instanceof Error ? e.message : String(e)));
-    }
+    const result = await this.sf.terminate();
+    return wrapToolResult(result);
   }
 }
 
-// --- Simple DAP command tool (continue, next, stepIn, stepOut, pause) ---
+// --- Stepping tools (continue, next, stepIn, stepOut, pause) ---
 
-function makeStepTool(command: string, label: string) {
-  return class implements vscode.LanguageModelTool<ThreadIdInput> {
-    constructor(private readonly mgr: DebugSessionManager) {}
+export class DebugContinueTool implements vscode.LanguageModelTool<ThreadIdInput> {
+  constructor(private readonly sf: SessionFactory) {}
 
-    prepareInvocation(
-      options: vscode.LanguageModelToolInvocationPrepareOptions<ThreadIdInput>,
-    ): vscode.ProviderResult<vscode.PreparedToolInvocation> {
-      return { invocationMessage: `${label} on thread ${options.input.threadId ?? 'default'}` };
-    }
+  prepareInvocation(
+    options: vscode.LanguageModelToolInvocationPrepareOptions<ThreadIdInput>,
+  ): vscode.ProviderResult<vscode.PreparedToolInvocation> {
+    return { invocationMessage: `Continuing execution on thread ${options.input.threadId ?? 'default'}` };
+  }
 
-    async invoke(
-      options: vscode.LanguageModelToolInvocationOptions<ThreadIdInput>,
-    ): Promise<vscode.LanguageModelToolResult> {
-      if (!this.mgr.activeSession) return wrap(noSession());
-      const tid = resolveThreadId(this.mgr, options.input);
-      if (typeof tid !== 'number') return wrap(tid);
-      try {
-        await this.mgr.customRequest(command, { threadId: tid });
-        return wrap(ok({ threadId: tid, message: `${label} on thread ${tid}` }));
-      } catch (e: unknown) {
-        return wrap(err(e instanceof Error ? e.message : String(e)));
-      }
-    }
-  };
+  async invoke(
+    options: vscode.LanguageModelToolInvocationOptions<ThreadIdInput>,
+  ): Promise<vscode.LanguageModelToolResult> {
+    if (!this.sf.session) return wrapToolResult(noSessionResult());
+    const threadId = options.input.threadId ?? this.sf.session.stopInfo?.threadId;
+    if (threadId === undefined) return wrapToolResult(errorResult('threadId is required — no stopped thread available', 'INVALID_PARAMS'));
+    const result = await handleDebugContinue(this.sf.session, { threadId });
+    return wrapToolResult(result);
+  }
 }
 
-const DebugContinueTool = makeStepTool('continue', 'Continued execution');
-const DebugNextTool = makeStepTool('next', 'Stepped over');
-const DebugStepInTool = makeStepTool('stepIn', 'Stepped into');
-const DebugStepOutTool = makeStepTool('stepOut', 'Stepped out');
-const DebugPauseTool = makeStepTool('pause', 'Paused execution');
+export class DebugNextTool implements vscode.LanguageModelTool<ThreadIdInput> {
+  constructor(private readonly sf: SessionFactory) {}
 
-// --- Stack Trace ---
+  prepareInvocation(
+    options: vscode.LanguageModelToolInvocationPrepareOptions<ThreadIdInput>,
+  ): vscode.ProviderResult<vscode.PreparedToolInvocation> {
+    return { invocationMessage: `Stepping over on thread ${options.input.threadId ?? 'default'}` };
+  }
 
-class DebugStackTraceTool implements vscode.LanguageModelTool<ThreadIdInput> {
-  constructor(private readonly mgr: DebugSessionManager) {}
+  async invoke(
+    options: vscode.LanguageModelToolInvocationOptions<ThreadIdInput>,
+  ): Promise<vscode.LanguageModelToolResult> {
+    if (!this.sf.session) return wrapToolResult(noSessionResult());
+    const threadId = options.input.threadId ?? this.sf.session.stopInfo?.threadId;
+    if (threadId === undefined) return wrapToolResult(errorResult('threadId is required — no stopped thread available', 'INVALID_PARAMS'));
+    const result = await handleDebugNext(this.sf.session, { threadId });
+    return wrapToolResult(result);
+  }
+}
+
+export class DebugStepInTool implements vscode.LanguageModelTool<ThreadIdInput> {
+  constructor(private readonly sf: SessionFactory) {}
+
+  prepareInvocation(
+    options: vscode.LanguageModelToolInvocationPrepareOptions<ThreadIdInput>,
+  ): vscode.ProviderResult<vscode.PreparedToolInvocation> {
+    return { invocationMessage: `Stepping into on thread ${options.input.threadId ?? 'default'}` };
+  }
+
+  async invoke(
+    options: vscode.LanguageModelToolInvocationOptions<ThreadIdInput>,
+  ): Promise<vscode.LanguageModelToolResult> {
+    if (!this.sf.session) return wrapToolResult(noSessionResult());
+    const threadId = options.input.threadId ?? this.sf.session.stopInfo?.threadId;
+    if (threadId === undefined) return wrapToolResult(errorResult('threadId is required — no stopped thread available', 'INVALID_PARAMS'));
+    const result = await handleDebugStepIn(this.sf.session, { threadId });
+    return wrapToolResult(result);
+  }
+}
+
+export class DebugStepOutTool implements vscode.LanguageModelTool<ThreadIdInput> {
+  constructor(private readonly sf: SessionFactory) {}
+
+  prepareInvocation(
+    options: vscode.LanguageModelToolInvocationPrepareOptions<ThreadIdInput>,
+  ): vscode.ProviderResult<vscode.PreparedToolInvocation> {
+    return { invocationMessage: `Stepping out on thread ${options.input.threadId ?? 'default'}` };
+  }
+
+  async invoke(
+    options: vscode.LanguageModelToolInvocationOptions<ThreadIdInput>,
+  ): Promise<vscode.LanguageModelToolResult> {
+    if (!this.sf.session) return wrapToolResult(noSessionResult());
+    const threadId = options.input.threadId ?? this.sf.session.stopInfo?.threadId;
+    if (threadId === undefined) return wrapToolResult(errorResult('threadId is required — no stopped thread available', 'INVALID_PARAMS'));
+    const result = await handleDebugStepOut(this.sf.session, { threadId });
+    return wrapToolResult(result);
+  }
+}
+
+export class DebugPauseTool implements vscode.LanguageModelTool<ThreadIdInput> {
+  constructor(private readonly sf: SessionFactory) {}
+
+  prepareInvocation(
+    options: vscode.LanguageModelToolInvocationPrepareOptions<ThreadIdInput>,
+  ): vscode.ProviderResult<vscode.PreparedToolInvocation> {
+    return { invocationMessage: `Pausing execution on thread ${options.input.threadId ?? 'default'}` };
+  }
+
+  async invoke(
+    options: vscode.LanguageModelToolInvocationOptions<ThreadIdInput>,
+  ): Promise<vscode.LanguageModelToolResult> {
+    if (!this.sf.session) return wrapToolResult(noSessionResult());
+    const threadId = options.input.threadId ?? this.sf.session.stopInfo?.threadId;
+    if (threadId === undefined) return wrapToolResult(errorResult('threadId is required — no stopped thread available', 'INVALID_PARAMS'));
+    const result = await handleDebugPause(this.sf.session, { threadId });
+    return wrapToolResult(result);
+  }
+}
+
+
+// --- Inspection tools (stack_trace, scopes, variables, evaluate) ---
+
+export class DebugStackTraceTool implements vscode.LanguageModelTool<ThreadIdInput> {
+  constructor(private readonly sf: SessionFactory) {}
 
   prepareInvocation(): vscode.ProviderResult<vscode.PreparedToolInvocation> {
     return { invocationMessage: 'Retrieving stack trace' };
@@ -159,29 +187,16 @@ class DebugStackTraceTool implements vscode.LanguageModelTool<ThreadIdInput> {
   async invoke(
     options: vscode.LanguageModelToolInvocationOptions<ThreadIdInput>,
   ): Promise<vscode.LanguageModelToolResult> {
-    if (!this.mgr.activeSession) return wrap(noSession());
-    const tid = resolveThreadId(this.mgr, options.input);
-    if (typeof tid !== 'number') return wrap(tid);
-    try {
-      const body = await this.mgr.customRequest('stackTrace', { threadId: tid });
-      const frames = (body?.stackFrames ?? []).map((f: any) => ({
-        id: f.id,
-        name: f.name,
-        source: f.source ? { name: f.source.name, path: f.source.path, sourceReference: f.source.sourceReference } : undefined,
-        line: f.line,
-        column: f.column,
-      }));
-      return wrap(ok({ stackFrames: frames, totalFrames: body?.totalFrames }));
-    } catch (e: unknown) {
-      return wrap(err(e instanceof Error ? e.message : String(e)));
-    }
+    if (!this.sf.session) return wrapToolResult(noSessionResult());
+    const threadId = options.input.threadId ?? this.sf.session.stopInfo?.threadId;
+    if (threadId === undefined) return wrapToolResult(errorResult('threadId is required — no stopped thread available', 'INVALID_PARAMS'));
+    const result = await handleDebugStackTrace(this.sf.session, { threadId });
+    return wrapToolResult(result);
   }
 }
 
-// --- Scopes ---
-
-class DebugScopesTool implements vscode.LanguageModelTool<ScopesInput> {
-  constructor(private readonly mgr: DebugSessionManager) {}
+export class DebugScopesTool implements vscode.LanguageModelTool<ScopesInput> {
+  constructor(private readonly sf: SessionFactory) {}
 
   prepareInvocation(
     options: vscode.LanguageModelToolInvocationPrepareOptions<ScopesInput>,
@@ -192,27 +207,14 @@ class DebugScopesTool implements vscode.LanguageModelTool<ScopesInput> {
   async invoke(
     options: vscode.LanguageModelToolInvocationOptions<ScopesInput>,
   ): Promise<vscode.LanguageModelToolResult> {
-    if (!this.mgr.activeSession) return wrap(noSession());
-    try {
-      const body = await this.mgr.customRequest('scopes', { frameId: options.input.frameId });
-      const scopes = (body?.scopes ?? []).map((s: any) => ({
-        name: s.name,
-        variablesReference: s.variablesReference,
-        namedVariables: s.namedVariables,
-        indexedVariables: s.indexedVariables,
-        expensive: s.expensive,
-      }));
-      return wrap(ok({ scopes }));
-    } catch (e: unknown) {
-      return wrap(err(e instanceof Error ? e.message : String(e)));
-    }
+    if (!this.sf.session) return wrapToolResult(noSessionResult());
+    const result = await handleDebugScopes(this.sf.session, { frameId: options.input.frameId });
+    return wrapToolResult(result);
   }
 }
 
-// --- Variables ---
-
-class DebugVariablesTool implements vscode.LanguageModelTool<VariablesInput> {
-  constructor(private readonly mgr: DebugSessionManager) {}
+export class DebugVariablesTool implements vscode.LanguageModelTool<VariablesInput> {
+  constructor(private readonly sf: SessionFactory) {}
 
   prepareInvocation(
     options: vscode.LanguageModelToolInvocationPrepareOptions<VariablesInput>,
@@ -223,31 +225,18 @@ class DebugVariablesTool implements vscode.LanguageModelTool<VariablesInput> {
   async invoke(
     options: vscode.LanguageModelToolInvocationOptions<VariablesInput>,
   ): Promise<vscode.LanguageModelToolResult> {
-    if (!this.mgr.activeSession) return wrap(noSession());
-    try {
-      const args: Record<string, unknown> = { variablesReference: options.input.variablesReference };
-      if (options.input.start !== undefined) args.start = options.input.start;
-      if (options.input.count !== undefined) args.count = options.input.count;
-      const body = await this.mgr.customRequest('variables', args);
-      const variables = (body?.variables ?? []).map((v: any) => ({
-        name: v.name,
-        value: v.value,
-        type: v.type,
-        variablesReference: v.variablesReference ?? 0,
-        indexedVariables: v.indexedVariables,
-        namedVariables: v.namedVariables,
-      }));
-      return wrap(ok({ variables }));
-    } catch (e: unknown) {
-      return wrap(err(e instanceof Error ? e.message : String(e)));
-    }
+    if (!this.sf.session) return wrapToolResult(noSessionResult());
+    const result = await handleDebugVariables(this.sf.session, {
+      variablesReference: options.input.variablesReference,
+      start: options.input.start,
+      count: options.input.count,
+    });
+    return wrapToolResult(result);
   }
 }
 
-// --- Evaluate ---
-
-class DebugEvaluateTool implements vscode.LanguageModelTool<EvaluateInput> {
-  constructor(private readonly mgr: DebugSessionManager) {}
+export class DebugEvaluateTool implements vscode.LanguageModelTool<EvaluateInput> {
+  constructor(private readonly sf: SessionFactory) {}
 
   prepareInvocation(
     options: vscode.LanguageModelToolInvocationPrepareOptions<EvaluateInput>,
@@ -258,78 +247,57 @@ class DebugEvaluateTool implements vscode.LanguageModelTool<EvaluateInput> {
   async invoke(
     options: vscode.LanguageModelToolInvocationOptions<EvaluateInput>,
   ): Promise<vscode.LanguageModelToolResult> {
-    if (!this.mgr.activeSession) return wrap(noSession());
-    try {
-      const args: Record<string, unknown> = {
-        expression: options.input.expression,
-        context: options.input.context ?? 'repl',
-      };
-      if (options.input.frameId !== undefined) args.frameId = options.input.frameId;
-      const body = await this.mgr.customRequest('evaluate', args);
-      return wrap(ok({
-        result: body?.result,
-        type: body?.type,
-        variablesReference: body?.variablesReference ?? 0,
-        indexedVariables: body?.indexedVariables,
-        namedVariables: body?.namedVariables,
-      }));
-    } catch (e: unknown) {
-      return wrap(err(e instanceof Error ? e.message : String(e)));
-    }
+    if (!this.sf.session) return wrapToolResult(noSessionResult());
+    const result = await handleDebugEvaluate(this.sf.session, {
+      expression: options.input.expression,
+      frameId: options.input.frameId,
+      context: options.input.context,
+    });
+    return wrapToolResult(result);
   }
 }
 
-// --- Status ---
 
-class DebugStatusTool implements vscode.LanguageModelTool<Record<string, never>> {
-  constructor(private readonly mgr: DebugSessionManager) {}
+// --- Status, threads, breakpoints, breakpoints_get ---
+
+export class DebugStatusTool implements vscode.LanguageModelTool<Record<string, never>> {
+  constructor(private readonly sf: SessionFactory) {}
 
   prepareInvocation(): vscode.ProviderResult<vscode.PreparedToolInvocation> {
     return { invocationMessage: 'Checking debug session status' };
   }
 
   async invoke(): Promise<vscode.LanguageModelToolResult> {
-    const guidance: Record<string, string> = {
-      not_started: 'No active session. Call debug_launch to start debugging.',
-      launching: 'Session is starting. Wait a moment and check again.',
-      listening: 'Listening for Xdebug connections. Trigger your PHP script now.',
-      connected: 'Xdebug connected, execution running. Set breakpoints or call debug_pause.',
-      paused: 'Execution paused. Inspect with debug_stack_trace, debug_variables, debug_evaluate. Step with debug_next/debug_step_in/debug_step_out. Resume with debug_continue.',
-      terminated: 'Session ended. Call debug_launch to start a new session.',
-    };
-    return wrap(ok({
-      state: this.mgr.state,
-      stopInfo: this.mgr.stopInfo,
-      guidance: guidance[this.mgr.state] ?? 'Unknown state.',
-    }));
+    if (!this.sf.session) {
+      return wrapToolResult({
+        success: true,
+        data: {
+          state: 'not_started',
+          guidance: 'No active session. Call debug_launch to start debugging.',
+        },
+      });
+    }
+    const result = handleDebugStatus(this.sf.session);
+    return wrapToolResult(result);
   }
 }
 
-// --- Threads ---
-
-class DebugThreadsTool implements vscode.LanguageModelTool<Record<string, never>> {
-  constructor(private readonly mgr: DebugSessionManager) {}
+export class DebugThreadsTool implements vscode.LanguageModelTool<Record<string, never>> {
+  constructor(private readonly sf: SessionFactory) {}
 
   prepareInvocation(): vscode.ProviderResult<vscode.PreparedToolInvocation> {
     return { invocationMessage: 'Listing debug threads' };
   }
 
   async invoke(): Promise<vscode.LanguageModelToolResult> {
-    if (!this.mgr.activeSession) return wrap(noSession());
-    try {
-      const body = await this.mgr.customRequest('threads');
-      const threads = (body?.threads ?? []).map((t: any) => ({ id: t.id, name: t.name }));
-      return wrap(ok({ threads }));
-    } catch (e: unknown) {
-      return wrap(err(e instanceof Error ? e.message : String(e)));
-    }
+    if (!this.sf.session) return wrapToolResult(noSessionResult());
+    const result = await handleDebugThreads(this.sf.session);
+    return wrapToolResult(result);
   }
 }
 
-// --- Set Breakpoints ---
-
-class DebugBreakpointsTool implements vscode.LanguageModelTool<BreakpointsInput> {
-  constructor(private readonly mgr: DebugSessionManager) {}
+export class DebugBreakpointsTool implements vscode.LanguageModelTool<BreakpointsInput> {
+  constructor(private readonly sf: SessionFactory) {}
 
   prepareInvocation(
     options: vscode.LanguageModelToolInvocationPrepareOptions<BreakpointsInput>,
@@ -340,33 +308,28 @@ class DebugBreakpointsTool implements vscode.LanguageModelTool<BreakpointsInput>
   async invoke(
     options: vscode.LanguageModelToolInvocationOptions<BreakpointsInput>,
   ): Promise<vscode.LanguageModelToolResult> {
-    if (!this.mgr.activeSession) return wrap(noSession());
-    try {
-      // Pass the local path directly — xdebug.php-debug handles
-      // path mapping via its own pathMappings config
-      const body = await this.mgr.customRequest('setBreakpoints', {
-        source: { path: options.input.path },
-        breakpoints: options.input.breakpoints.map((bp) => ({
-          line: bp.line,
-          ...(bp.condition !== undefined ? { condition: bp.condition } : {}),
-          ...(bp.hitCondition !== undefined ? { hitCondition: bp.hitCondition } : {}),
-          ...(bp.logMessage !== undefined ? { logMessage: bp.logMessage } : {}),
-        })),
-      });
-      const breakpoints = (body?.breakpoints ?? []).map((bp: any) => ({
-        verified: bp.verified,
-        line: bp.line,
-        id: bp.id,
-        message: bp.message,
-      }));
-      return wrap(ok({
-        path: options.input.path,
-        breakpoints,
-        message: `Set ${breakpoints.length} breakpoint(s) in ${options.input.path}`,
-      }));
-    } catch (e: unknown) {
-      return wrap(err(e instanceof Error ? e.message : String(e)));
-    }
+    if (!this.sf.session) return wrapToolResult(noSessionResult());
+    const result = await handleDebugSetBreakpoints(this.sf.session, {
+      path: options.input.path,
+      breakpoints: options.input.breakpoints,
+    });
+    return wrapToolResult(result);
+  }
+}
+
+export class DebugBreakpointsGetTool implements vscode.LanguageModelTool<BreakpointsGetInput> {
+  constructor(private readonly sf: SessionFactory) {}
+
+  prepareInvocation(): vscode.ProviderResult<vscode.PreparedToolInvocation> {
+    return { invocationMessage: 'Retrieving breakpoints' };
+  }
+
+  async invoke(
+    options: vscode.LanguageModelToolInvocationOptions<BreakpointsGetInput>,
+  ): Promise<vscode.LanguageModelToolResult> {
+    if (!this.sf.breakpointLedger) return wrapToolResult(noSessionResult());
+    const breakpoints = this.sf.breakpointLedger.getForFile(options.input.path);
+    return wrapToolResult({ success: true, data: breakpoints });
   }
 }
 
@@ -374,23 +337,24 @@ class DebugBreakpointsTool implements vscode.LanguageModelTool<BreakpointsInput>
 
 export function registerAllLmTools(
   context: vscode.ExtensionContext,
-  mgr: DebugSessionManager,
+  sf: SessionFactory,
 ): void {
   const tools: Array<[string, vscode.LanguageModelTool<any>]> = [
-    ['debug_launch', new DebugLaunchTool(mgr)],
-    ['debug_terminate', new DebugTerminateTool(mgr)],
-    ['debug_status', new DebugStatusTool(mgr)],
-    ['debug_continue', new DebugContinueTool(mgr)],
-    ['debug_next', new DebugNextTool(mgr)],
-    ['debug_step_in', new DebugStepInTool(mgr)],
-    ['debug_step_out', new DebugStepOutTool(mgr)],
-    ['debug_pause', new DebugPauseTool(mgr)],
-    ['debug_stack_trace', new DebugStackTraceTool(mgr)],
-    ['debug_scopes', new DebugScopesTool(mgr)],
-    ['debug_variables', new DebugVariablesTool(mgr)],
-    ['debug_evaluate', new DebugEvaluateTool(mgr)],
-    ['debug_threads', new DebugThreadsTool(mgr)],
-    ['debug_breakpoints', new DebugBreakpointsTool(mgr)],
+    ['debug_launch', new DebugLaunchTool(sf)],
+    ['debug_terminate', new DebugTerminateTool(sf)],
+    ['debug_status', new DebugStatusTool(sf)],
+    ['debug_continue', new DebugContinueTool(sf)],
+    ['debug_next', new DebugNextTool(sf)],
+    ['debug_step_in', new DebugStepInTool(sf)],
+    ['debug_step_out', new DebugStepOutTool(sf)],
+    ['debug_pause', new DebugPauseTool(sf)],
+    ['debug_stack_trace', new DebugStackTraceTool(sf)],
+    ['debug_scopes', new DebugScopesTool(sf)],
+    ['debug_variables', new DebugVariablesTool(sf)],
+    ['debug_evaluate', new DebugEvaluateTool(sf)],
+    ['debug_threads', new DebugThreadsTool(sf)],
+    ['debug_breakpoints', new DebugBreakpointsTool(sf)],
+    ['debug_breakpoints_get', new DebugBreakpointsGetTool(sf)],
   ];
 
   for (const [name, tool] of tools) {

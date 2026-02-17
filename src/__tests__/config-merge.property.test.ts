@@ -94,7 +94,11 @@ describe('Feature: vscode-agentic-debug, Property 15: Config merge priority', ()
       fc.property(
         arbPort,
         fc.boolean(),
-        arbPathMappings,
+        fc.dictionary(
+          fc.string({ minLength: 1, maxLength: 10 }),
+          fc.string({ minLength: 1, maxLength: 10 }),
+          { minKeys: 1, maxKeys: 3 },
+        ),
         arbPort,
         fc.boolean(),
         arbPathMappings,
@@ -136,7 +140,11 @@ describe('Feature: vscode-agentic-debug, Property 15: Config merge priority', ()
         arbPort,
         arbHostname,
         fc.boolean(),
-        arbPathMappings,
+        fc.dictionary(
+          fc.string({ minLength: 1, maxLength: 10 }),
+          fc.string({ minLength: 1, maxLength: 10 }),
+          { minKeys: 1, maxKeys: 3 },
+        ),
         fc.integer({ min: 0, max: 10 }),
         (vsPort, vsHostname, vsStopOnEntry, vsPathMappings, vsMaxConnections) => {
           mockVsCodeSettings({

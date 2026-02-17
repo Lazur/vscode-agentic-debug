@@ -1,6 +1,7 @@
 /**
  * Property-based tests for VsCodeDebugBackend.
- * Property 16: Agent session identification.
+ * Property 8: VsCodeDebugBackend launches with type 'php'.
+ * Validates: Requirements 6.1, 6.2, 6.3, 6.4
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import fc from 'fast-check';
@@ -17,7 +18,7 @@ function createMockSession(
     type: overrides.type ?? 'php',
     name: 'Test Session',
     workspaceFolder: undefined,
-    configuration: overrides.configuration ?? { type: 'php', name: 'Test', request: 'launch', __agentInitiated: true },
+    configuration: overrides.configuration ?? { type: 'php', name: 'Test', request: 'launch' },
     customRequest: vi.fn().mockResolvedValue({}),
     getDebugProtocolBreakpoint: vi.fn(),
     parentSession: undefined,
@@ -28,17 +29,17 @@ beforeEach(() => {
   (vscode as any).__resetMocks();
 });
 
-describe('Feature: vscode-agentic-debug, Property 16: Agent session identification', () => {
+describe('Property 8: VsCodeDebugBackend launches with type php', () => {
   /**
-   * **Validates: Requirements 15.3**
+   * **Validates: Requirements 6.1, 6.2, 6.3, 6.4**
    *
    * For any debug session started via VsCodeDebugBackend.launch(),
-   * the launch configuration SHALL include __agentInitiated: true and type: 'php-agent'.
-   * The isAgentSession filter SHALL return true only for sessions where
-   * session.type === 'php' AND configuration.__agentInitiated === true.
+   * the launch configuration SHALL have type: 'php' directly.
+   * It SHALL NOT contain php-agent, __agentInitiated, backendMode, or agentSessionId.
+   * isAgentSession SHALL return true for any session with type === 'php'.
    */
 
-  it('buildDebugConfig always sets type=php-agent and __agentInitiated=true', async () => {
+  it('buildDebugConfig always sets type=php with no forbidden fields', async () => {
     await fc.assert(
       fc.asyncProperty(
         fc.record({
@@ -52,14 +53,12 @@ describe('Feature: vscode-agentic-debug, Property 16: Agent session identificati
           const backend = new VsCodeDebugBackend();
           await backend.initialize();
 
-          // Mock startDebugging to capture the config and fire session start
           let capturedConfig: any = null;
           (vscode.debug.startDebugging as any).mockImplementation(async (_folder: any, cfg: any) => {
             capturedConfig = cfg;
-            // Simulate the config provider transforming php-agent → php
             const session = createMockSession({
               type: 'php',
-              configuration: { ...cfg, type: 'php', __agentInitiated: true },
+              configuration: { ...cfg, type: 'php' },
             });
             setTimeout(() => {
               const listeners = (vscode.debug.onDidStartDebugSession as any).listeners;
@@ -70,9 +69,12 @@ describe('Feature: vscode-agentic-debug, Property 16: Agent session identificati
 
           await backend.launch(config as any);
 
-          // The config passed to startDebugging must have type 'php-agent' and __agentInitiated
-          expect(capturedConfig.type).toBe('php-agent');
-          expect(capturedConfig.__agentInitiated).toBe(true);
+          // Must use type 'php' directly (Requirement 6.1)
+          expect(capturedConfig.type).toBe('php');
+          // Must NOT contain forbidden fields (Requirements 6.3, 6.4)
+          expect(capturedConfig).not.toHaveProperty('__agentInitiated');
+          expect(capturedConfig).not.toHaveProperty('backendMode');
+          expect(capturedConfig).not.toHaveProperty('agentSessionId');
 
           await backend.disconnect();
         },
@@ -81,75 +83,24 @@ describe('Feature: vscode-agentic-debug, Property 16: Agent session identificati
     );
   }, 30000);
 
-  it('isAgentSession returns true only for php type with __agentInitiated marker', () => {
+  it('isAgentSession returns true for any php session (Requirement 6.2)', () => {
     fc.assert(
       fc.property(
-        fc.constantFrom('php', 'node', 'python', 'java', 'php-agent', 'go'),
-        fc.boolean(),
-        (sessionType, hasMarker) => {
+        fc.constantFrom('php', 'node', 'python', 'java', 'go'),
+        (sessionType) => {
           const session = createMockSession({
             type: sessionType,
             configuration: {
               type: sessionType,
               name: 'Test',
               request: 'launch',
-              ...(hasMarker ? { __agentInitiated: true } : {}),
             },
           });
 
           const result = isAgentSession(session);
 
-          // Should only be true when type is 'php' AND __agentInitiated is true
-          expect(result).toBe(sessionType === 'php' && hasMarker);
-        },
-      ),
-      { numRuns: 100 },
-    );
-  });
-
-  it('agent sessions are tracked in the Map on start and removed on terminate', async () => {
-    await fc.assert(
-      fc.asyncProperty(
-        fc.array(fc.uuid(), { minLength: 1, maxLength: 5 }),
-        async (sessionIds) => {
-          (vscode as any).__resetMocks();
-
-          const backend = new VsCodeDebugBackend();
-          await backend.initialize();
-
-          // Start sessions
-          for (const id of sessionIds) {
-            const session = createMockSession({
-              id,
-              type: 'php',
-              configuration: { type: 'php', name: 'Test', request: 'launch', __agentInitiated: true },
-            });
-            const listeners = (vscode.debug.onDidStartDebugSession as any).listeners;
-            for (const l of listeners) l(session);
-          }
-
-          // All agent sessions should be tracked
-          const tracked = backend.getAgentSessions();
-          for (const id of sessionIds) {
-            expect(tracked.has(id)).toBe(true);
-            expect(tracked.get(id)!.backendMode).toBe('ui');
-          }
-
-          // Terminate sessions
-          for (const id of sessionIds) {
-            const session = createMockSession({
-              id,
-              type: 'php',
-              configuration: { type: 'php', name: 'Test', request: 'launch', __agentInitiated: true },
-            });
-            const listeners = (vscode.debug.onDidTerminateDebugSession as any).listeners;
-            for (const l of listeners) l(session);
-          }
-
-          // All should be removed
-          expect(backend.getAgentSessions().size).toBe(0);
-
-          await backend.disconnect();
+          // Should be true when type is 'php', false otherwise
+          expect(result).toBe(sessionType === 'php');
         },
       ),
       { numRuns: 100 },
