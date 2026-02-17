@@ -153,9 +153,9 @@ All fields are optional. Here's what each one does:
 
 The `backendMode` parameter controls how the debug session runs:
 
-- **`"ui"` (default)** — Uses `VsCodeDebugBackend`, which calls `vscode.debug.startDebugging()` with `type: 'php'`. The developer sees the full VS Code debug UI: pause indicators, call stack panel, variable inspector, gutter breakpoints. The agent still has full programmatic control via the other tools. Use this when the user is actively watching or collaborating.
+- **`"ui"` (default, recommended)** — Uses `VsCodeDebugBackend`, which calls `vscode.debug.startDebugging()` with `type: 'php'`. The developer sees the full VS Code debug UI: pause indicators, call stack panel, variable inspector, gutter breakpoints. The agent still has full programmatic control via the other tools. Use this for all interactive debugging — stepping, variable inspection, breakpoints all work reliably.
 
-- **`"headless"`** — Uses `DAPClient`, which spawns `phpDebug.js` directly over stdio. No VS Code debug UI is shown. The agent communicates with the debug adapter directly via DAP protocol. Use this for automated investigation, batch debugging, or CI-like scenarios where no human is watching.
+- **`"headless"`** — Uses `DAPClient`, which spawns `phpDebug.js` directly over stdio. No VS Code debug UI is shown. Limited interactive capabilities: thread listing and variable inspection may not work reliably due to Xdebug's per-request connection lifecycle. Only use for automated/batch scenarios where no human interaction is needed.
 
 ### pathMappings resolution
 
