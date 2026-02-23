@@ -150,7 +150,7 @@ describe('9.1: Runtime compatibility check', () => {
     const { activate } = await import('../extension.js');
     activate(context);
 
-    expect(vscode.lm.registerTool).toHaveBeenCalledTimes(15);
+    expect(vscode.lm.registerTool).toHaveBeenCalledTimes(16);
   });
 
   it('runtime check detects when registerTool is a function', () => {

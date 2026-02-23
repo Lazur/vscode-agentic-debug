@@ -12,6 +12,7 @@ import { handleDebugEvaluate } from 'ts-php-debug-mcp/tools/debug-evaluate.js';
 import { handleDebugStatus } from 'ts-php-debug-mcp/tools/debug-status.js';
 import { handleDebugThreads } from 'ts-php-debug-mcp/tools/debug-threads.js';
 import { handleDebugSetBreakpoints } from 'ts-php-debug-mcp/tools/debug-set-breakpoints.js';
+import { handleDebugWait } from 'ts-php-debug-mcp/tools/debug-wait.js';
 import { wrapToolResult, noSessionResult } from './result-wrapper.js';
 import type { SessionFactory } from './session-factory.js';
 import type {
@@ -20,6 +21,7 @@ import type {
   ScopesInput,
   VariablesInput,
   EvaluateInput,
+  WaitInput,
   BreakpointsInput,
   BreakpointsGetInput,
 } from './types.js';
@@ -355,9 +357,38 @@ export function registerAllLmTools(
     ['debug_threads', new DebugThreadsTool(sf)],
     ['debug_breakpoints', new DebugBreakpointsTool(sf)],
     ['debug_breakpoints_get', new DebugBreakpointsGetTool(sf)],
+    ['debug_wait', new DebugWaitTool(sf)],
   ];
 
   for (const [name, tool] of tools) {
     context.subscriptions.push(vscode.lm.registerTool(name, tool));
   }
 }
+// --- Wait ---
+
+export class DebugWaitTool implements vscode.LanguageModelTool<WaitInput> {
+  constructor(private readonly sf: SessionFactory) {}
+
+  prepareInvocation(): vscode.ProviderResult<vscode.PreparedToolInvocation> {
+    return { invocationMessage: 'Waiting for debug event...' };
+  }
+
+  async invoke(
+    options: vscode.LanguageModelToolInvocationOptions<WaitInput>,
+    token: vscode.CancellationToken,
+  ): Promise<vscode.LanguageModelToolResult> {
+    if (!this.sf.session) return wrapToolResult(noSessionResult());
+
+    const timeout = options.input.timeout ?? 30000;
+
+    const signal = {
+      get aborted() { return token.isCancellationRequested; },
+      onAbort(cb: () => void) { token.onCancellationRequested(cb); },
+    };
+
+    const result = await handleDebugWait(this.sf.session, { timeout, signal });
+    return wrapToolResult(result);
+  }
+}
+
+

@@ -130,6 +130,13 @@ export class VsCodeDebugBackend implements DebugBackend {
     handlers.push(handler);
     this.eventHandlers.set(eventName, handlers);
   }
+  offEvent(eventName: string, handler: EventHandler): void {
+    const handlers = this.eventHandlers.get(eventName);
+    if (handlers) {
+      const idx = handlers.indexOf(handler);
+      if (idx !== -1) handlers.splice(idx, 1);
+    }
+  }
 
   onAnyEvent(handler: EventHandler): void {
     this.anyEventHandlers.push(handler);

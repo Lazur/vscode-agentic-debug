@@ -13,7 +13,22 @@
   ],
   "main": "./out/extension.js",
   "activationEvents": [
-    "onLanguageModelTool:debug_launch"
+    "onLanguageModelTool:debug_launch",
+    "onLanguageModelTool:debug_terminate",
+    "onLanguageModelTool:debug_status",
+    "onLanguageModelTool:debug_continue",
+    "onLanguageModelTool:debug_next",
+    "onLanguageModelTool:debug_step_in",
+    "onLanguageModelTool:debug_step_out",
+    "onLanguageModelTool:debug_pause",
+    "onLanguageModelTool:debug_breakpoints",
+    "onLanguageModelTool:debug_breakpoints_get",
+    "onLanguageModelTool:debug_stack_trace",
+    "onLanguageModelTool:debug_scopes",
+    "onLanguageModelTool:debug_variables",
+    "onLanguageModelTool:debug_evaluate",
+    "onLanguageModelTool:debug_threads",
+    "onLanguageModelTool:debug_wait"
   ],
   "contributes": {
     "configuration": {
@@ -364,6 +379,24 @@
         "inputSchema": {
           "type": "object",
           "properties": {}
+        }
+      },
+      {
+        "name": "debug_wait",
+        "displayName": "Debug: Wait for Event",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "debugWait",
+        "icon": "$(watch)",
+        "modelDescription": "Block until a debug event occurs (stopped, thread started, terminated, continued). Use INSTEAD of polling debug_status in a loop.\n\nCall this after debug_continue, debug_next, debug_step_in, debug_step_out, or debug_launch to wait for the debugger to reach the next state.\n\nReturns immediately if the session is already paused.\n\nReturns: { reason, event, body, status } where reason is 'event', 'already_paused', 'timeout', or 'cancelled'.",
+        "userDescription": "Wait for the next debug event (breakpoint hit, step complete, etc.)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "timeout": {
+              "type": "number",
+              "description": "Maximum wait time in milliseconds (default: 30000)"
+            }
+          }
         }
       }
     ]

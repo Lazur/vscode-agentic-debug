@@ -45,6 +45,11 @@ export interface EvaluateInput {
   context?: 'repl' | 'watch' | 'hover';
 }
 
+/** Input for debug_wait tool (Requirement 1.2). */
+export interface WaitInput {
+  timeout?: number;
+}
+
 /** Tracking entry for active agent debug sessions (Requirements 6.1, 15.5). */
 export interface AgentSessionEntry {
   sessionId: string;
