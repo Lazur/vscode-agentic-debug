@@ -50,13 +50,15 @@ export class SessionFactory {
     const config = this.buildConfig(params);
     this.outputChannel.appendLine(`[launch] Final resolved config: ${JSON.stringify(config, null, 2)}`);
 
-    // 3. Create backend — always UI mode for now; headless has limited
-    //    thread/variable support and is not ready for interactive use.
+    // 3. Create backend based on requested mode (Req 15.1, 15.2)
     const requestedMode = params.backendMode ?? 'ui';
     if (requestedMode === 'headless') {
-      this.outputChannel.appendLine(`[launch] ⚠ backendMode "headless" requested but forced to "ui" — headless is not reliable for interactive debugging`);
+      this.outputChannel.appendLine(`[launch] Creating DAPClient backend (headless mode)`);
+      this.backend = new DAPClient(config.adapterPath);
+    } else {
+      this.outputChannel.appendLine(`[launch] Creating VsCodeDebugBackend (ui mode)`);
+      this.backend = new VsCodeDebugBackend();
     }
-    this.backend = new VsCodeDebugBackend();
 
     // 4. Create PathMapper from pathMappings (Record<server, local> → PathMapping[])
     const pathMapper = new PathMapper(

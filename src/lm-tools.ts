@@ -18,12 +18,12 @@ import type { SessionFactory } from './session-factory.js';
 import type {
   LaunchInput,
   ThreadIdInput,
-  ScopesInput,
-  VariablesInput,
-  EvaluateInput,
   WaitInput,
-  BreakpointsInput,
   BreakpointsGetInput,
+  DebugScopesInput,
+  DebugVariablesInput,
+  DebugEvaluateInput,
+  DebugSetBreakpointsInput,
 } from './types.js';
 
 // --- Launch ---
@@ -197,17 +197,17 @@ export class DebugStackTraceTool implements vscode.LanguageModelTool<ThreadIdInp
   }
 }
 
-export class DebugScopesTool implements vscode.LanguageModelTool<ScopesInput> {
+export class DebugScopesTool implements vscode.LanguageModelTool<DebugScopesInput> {
   constructor(private readonly sf: SessionFactory) {}
 
   prepareInvocation(
-    options: vscode.LanguageModelToolInvocationPrepareOptions<ScopesInput>,
+    options: vscode.LanguageModelToolInvocationPrepareOptions<DebugScopesInput>,
   ): vscode.ProviderResult<vscode.PreparedToolInvocation> {
     return { invocationMessage: `Retrieving scopes for frame ${options.input.frameId}` };
   }
 
   async invoke(
-    options: vscode.LanguageModelToolInvocationOptions<ScopesInput>,
+    options: vscode.LanguageModelToolInvocationOptions<DebugScopesInput>,
   ): Promise<vscode.LanguageModelToolResult> {
     if (!this.sf.session) return wrapToolResult(noSessionResult());
     const result = await handleDebugScopes(this.sf.session, { frameId: options.input.frameId });
@@ -215,21 +215,22 @@ export class DebugScopesTool implements vscode.LanguageModelTool<ScopesInput> {
   }
 }
 
-export class DebugVariablesTool implements vscode.LanguageModelTool<VariablesInput> {
+export class DebugVariablesTool implements vscode.LanguageModelTool<DebugVariablesInput> {
   constructor(private readonly sf: SessionFactory) {}
 
   prepareInvocation(
-    options: vscode.LanguageModelToolInvocationPrepareOptions<VariablesInput>,
+    options: vscode.LanguageModelToolInvocationPrepareOptions<DebugVariablesInput>,
   ): vscode.ProviderResult<vscode.PreparedToolInvocation> {
     return { invocationMessage: `Retrieving variables for ref ${options.input.variablesReference}` };
   }
 
   async invoke(
-    options: vscode.LanguageModelToolInvocationOptions<VariablesInput>,
+    options: vscode.LanguageModelToolInvocationOptions<DebugVariablesInput>,
   ): Promise<vscode.LanguageModelToolResult> {
     if (!this.sf.session) return wrapToolResult(noSessionResult());
     const result = await handleDebugVariables(this.sf.session, {
       variablesReference: options.input.variablesReference,
+      filter: options.input.filter,
       start: options.input.start,
       count: options.input.count,
     });
@@ -237,17 +238,17 @@ export class DebugVariablesTool implements vscode.LanguageModelTool<VariablesInp
   }
 }
 
-export class DebugEvaluateTool implements vscode.LanguageModelTool<EvaluateInput> {
+export class DebugEvaluateTool implements vscode.LanguageModelTool<DebugEvaluateInput> {
   constructor(private readonly sf: SessionFactory) {}
 
   prepareInvocation(
-    options: vscode.LanguageModelToolInvocationPrepareOptions<EvaluateInput>,
+    options: vscode.LanguageModelToolInvocationPrepareOptions<DebugEvaluateInput>,
   ): vscode.ProviderResult<vscode.PreparedToolInvocation> {
     return { invocationMessage: `Evaluating: ${options.input.expression}` };
   }
 
   async invoke(
-    options: vscode.LanguageModelToolInvocationOptions<EvaluateInput>,
+    options: vscode.LanguageModelToolInvocationOptions<DebugEvaluateInput>,
   ): Promise<vscode.LanguageModelToolResult> {
     if (!this.sf.session) return wrapToolResult(noSessionResult());
     const result = await handleDebugEvaluate(this.sf.session, {
@@ -298,17 +299,17 @@ export class DebugThreadsTool implements vscode.LanguageModelTool<Record<string,
   }
 }
 
-export class DebugBreakpointsTool implements vscode.LanguageModelTool<BreakpointsInput> {
+export class DebugBreakpointsTool implements vscode.LanguageModelTool<DebugSetBreakpointsInput> {
   constructor(private readonly sf: SessionFactory) {}
 
   prepareInvocation(
-    options: vscode.LanguageModelToolInvocationPrepareOptions<BreakpointsInput>,
+    options: vscode.LanguageModelToolInvocationPrepareOptions<DebugSetBreakpointsInput>,
   ): vscode.ProviderResult<vscode.PreparedToolInvocation> {
     return { invocationMessage: `Setting ${options.input.breakpoints.length} breakpoint(s) in ${options.input.path}` };
   }
 
   async invoke(
-    options: vscode.LanguageModelToolInvocationOptions<BreakpointsInput>,
+    options: vscode.LanguageModelToolInvocationOptions<DebugSetBreakpointsInput>,
   ): Promise<vscode.LanguageModelToolResult> {
     if (!this.sf.session) return wrapToolResult(noSessionResult());
     const result = await handleDebugSetBreakpoints(this.sf.session, {
@@ -386,7 +387,7 @@ export class DebugWaitTool implements vscode.LanguageModelTool<WaitInput> {
       onAbort(cb: () => void) { token.onCancellationRequested(cb); },
     };
 
-    const result = await handleDebugWait(this.sf.session, { timeout, signal });
+    const result = await handleDebugWait(this.sf.session, { timeout }, signal);
     return wrapToolResult(result);
   }
 }

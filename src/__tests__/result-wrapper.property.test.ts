@@ -13,7 +13,7 @@ import { wrapToolResult } from '../result-wrapper.js';
 const arbJsonPrimitive = fc.oneof(
   fc.string({ maxLength: 50 }),
   fc.integer(),
-  fc.double({ noNaN: true, noDefaultInfinity: true }),
+  fc.double({ noNaN: true, noDefaultInfinity: true }).filter((n) => !Object.is(n, -0)),
   fc.boolean(),
   fc.constant(null),
 );

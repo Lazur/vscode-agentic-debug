@@ -89,7 +89,7 @@ export class VsCodeDebugBackend implements DebugBackend {
     return this.syntheticResponse('configurationDone') as DebugProtocol.ConfigurationDoneResponse;
   }
 
-  async sendRequest<T extends DebugProtocol.Response>(command: string, args?: object): Promise<T> {
+  async sendRequest<T extends DebugProtocol.Response>(command: string, args?: object, _timeout?: number): Promise<T> {
     if (!this.session) throw new Error('No active debug session');
 
     const request: DebugProtocol.Request = {

@@ -104,8 +104,8 @@ describe('DebugWaitTool', () => {
     const tool = new DebugWaitTool(sf);
 
     // Mock handleDebugWait to return cancelled when signal.aborted is true
-    mockHandleDebugWait.mockImplementation(async (_session: any, options: any) => {
-      if (options.signal?.aborted) {
+    mockHandleDebugWait.mockImplementation(async (_session: any, _options: any, signal: any) => {
+      if (signal?.aborted) {
         return {
           success: true,
           data: { reason: 'cancelled', event: null, body: null, status: session.status },
@@ -119,8 +119,8 @@ describe('DebugWaitTool', () => {
     await tool.invoke({ input: {} } as any, token);
 
     // Verify the signal adapter correctly reflects the token's cancelled state
-    const [, options] = mockHandleDebugWait.mock.calls[0];
-    expect(options.signal.aborted).toBe(true);
+    const [, , signal] = mockHandleDebugWait.mock.calls[0];
+    expect(signal.aborted).toBe(true);
   });
 
   it('adapts CancellationToken to signal interface', async () => {
@@ -136,8 +136,8 @@ describe('DebugWaitTool', () => {
 
     await tool.invoke({ input: {} } as any, token);
 
-    const [, options] = mockHandleDebugWait.mock.calls[0];
-    expect(options.signal.aborted).toBe(false);
-    expect(typeof options.signal.onAbort).toBe('function');
+    const [, , signal] = mockHandleDebugWait.mock.calls[0];
+    expect(signal.aborted).toBe(false);
+    expect(typeof signal.onAbort).toBe('function');
   });
 });
